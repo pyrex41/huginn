@@ -23,7 +23,7 @@ func (a *Adapter) Prompt(context.Context, adapter.PromptRequest) (adapter.Prompt
 	return adapter.PromptResult{}, adapter.ErrStub
 }
 
-func (a *Adapter) Watch(context.Context, string) (<-chan adapter.Update, error) {
+func (a *Adapter) Watch(context.Context, adapter.WatchRequest) (<-chan adapter.Update, error) {
 	return nil, adapter.ErrStub
 }
 

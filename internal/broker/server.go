@@ -175,7 +175,7 @@ func (s *Server) list(ctx context.Context, req request) response {
 	return resultResponse(req.ID, listResult{Sessions: sessions})
 }
 
-func (s *Server) watch(_ context.Context, req request) response {
+func (s *Server) watch(ctx context.Context, req request) response {
 	var p watchParams
 	if err := decodeParams(req.Params, &p); err != nil {
 		return errorResponse(req.ID, CodeInvalidParams, "invalid params")
@@ -183,11 +183,24 @@ func (s *Server) watch(_ context.Context, req request) response {
 	if p.SessionID == "" {
 		return errorResponse(req.ID, CodeInvalidParams, "sessionId required")
 	}
-	// Skeleton: no runtime attach. Empty updates, not a live stream.
-	return resultResponse(req.ID, watchResult{Updates: []any{}})
+	ch, err := s.host.Watch(ctx, adapter.WatchRequest{
+		SessionID:       p.SessionID,
+		Resume:          p.Resume,
+		PermissionRelay: p.PermissionRelay,
+	})
+	if err != nil {
+		return errorResponse(req.ID, CodeInternalError, err.Error())
+	}
+	updates := make([]any, 0)
+	if ch != nil {
+		for u := range ch {
+			updates = append(updates, u)
+		}
+	}
+	return resultResponse(req.ID, watchResult{Updates: updates})
 }
 
-func (s *Server) prompt(_ context.Context, req request) response {
+func (s *Server) prompt(ctx context.Context, req request) response {
 	var p adapter.PromptRequest
 	if err := decodeParams(req.Params, &p); err != nil {
 		return errorResponse(req.ID, CodeInvalidParams, "invalid params")
@@ -195,10 +208,14 @@ func (s *Server) prompt(_ context.Context, req request) response {
 	if p.SessionID == "" {
 		return errorResponse(req.ID, CodeInvalidParams, "sessionId required")
 	}
-	return errorResponse(req.ID, CodeInternalError, adapter.ErrStub.Error())
+	res, err := s.host.Prompt(ctx, p)
+	if err != nil {
+		return errorResponse(req.ID, CodeInternalError, err.Error())
+	}
+	return resultResponse(req.ID, res)
 }
 
-func (s *Server) interrupt(_ context.Context, req request) response {
+func (s *Server) interrupt(ctx context.Context, req request) response {
 	var p interruptParams
 	if err := decodeParams(req.Params, &p); err != nil {
 		return errorResponse(req.ID, CodeInvalidParams, "invalid params")
@@ -206,10 +223,13 @@ func (s *Server) interrupt(_ context.Context, req request) response {
 	if p.SessionID == "" {
 		return errorResponse(req.ID, CodeInvalidParams, "sessionId required")
 	}
-	return errorResponse(req.ID, CodeInternalError, adapter.ErrStub.Error())
+	if err := s.host.Interrupt(ctx, p.SessionID); err != nil {
+		return errorResponse(req.ID, CodeInternalError, err.Error())
+	}
+	return resultResponse(req.ID, map[string]any{"ok": true})
 }
 
-func (s *Server) permission(_ context.Context, req request) response {
+func (s *Server) permission(ctx context.Context, req request) response {
 	var p adapter.PermissionRequest
 	if err := decodeParams(req.Params, &p); err != nil {
 		return errorResponse(req.ID, CodeInvalidParams, "invalid params")
@@ -217,8 +237,14 @@ func (s *Server) permission(_ context.Context, req request) response {
 	if p.SessionID == "" {
 		return errorResponse(req.ID, CodeInvalidParams, "sessionId required")
 	}
-	// Default deny-until-configured. Skeleton never opts in.
-	return resultResponse(req.ID, adapter.PermissionResult{Outcome: adapter.OutcomeDeny})
+	res, err := s.host.Permission(ctx, p)
+	if err != nil {
+		return resultResponse(req.ID, adapter.PermissionResult{Outcome: adapter.OutcomeDeny})
+	}
+	if res.Outcome == "" {
+		res.Outcome = adapter.OutcomeDeny
+	}
+	return resultResponse(req.ID, res)
 }
 
 func decodeParams(raw json.RawMessage, dest any) error {

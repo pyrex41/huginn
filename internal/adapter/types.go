@@ -50,8 +50,10 @@ type Content struct {
 
 // PromptRequest is session/prompt.
 type PromptRequest struct {
-	SessionID string    `json:"sessionId"`
-	Prompt    []Content `json:"prompt"`
+	SessionID       string    `json:"sessionId"`
+	Prompt          []Content `json:"prompt"`
+	Resume          bool      `json:"resume,omitempty"`
+	PermissionRelay bool      `json:"permissionRelay,omitempty"`
 }
 
 // StopReason matches ACP session/prompt results.
@@ -75,6 +77,13 @@ type Update struct {
 	SessionID string `json:"sessionId"`
 	Kind      string `json:"kind"`
 	Payload   any    `json:"payload,omitempty"`
+}
+
+// WatchRequest is session/watch.
+type WatchRequest struct {
+	SessionID       string `json:"sessionId"`
+	Resume          bool   `json:"resume,omitempty"`
+	PermissionRelay bool   `json:"permissionRelay,omitempty"`
 }
 
 // Verdict is grokbot's permission decision. Maps to allow_once / reject_once.
@@ -112,7 +121,7 @@ type Adapter interface {
 	Name() string
 	List(ctx context.Context) ([]Session, error)
 	Prompt(ctx context.Context, req PromptRequest) (PromptResult, error)
-	Watch(ctx context.Context, sessionID string) (<-chan Update, error)
+	Watch(ctx context.Context, req WatchRequest) (<-chan Update, error)
 	Interrupt(ctx context.Context, sessionID string) error
 	Permission(ctx context.Context, req PermissionRequest) (PermissionResult, error)
 }

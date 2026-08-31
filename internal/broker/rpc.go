@@ -62,7 +62,9 @@ type listResult struct {
 }
 
 type watchParams struct {
-	SessionID string `json:"sessionId"`
+	SessionID       string `json:"sessionId"`
+	Resume          bool   `json:"resume,omitempty"`
+	PermissionRelay bool   `json:"permissionRelay,omitempty"`
 }
 
 type watchResult struct {

@@ -44,7 +44,8 @@ Usage:
 Environment:
   HUGINN_TOKEN   sidecar secret (required if --token is omitted)
 
-serve binds loopback only. Adapters are stubs; no live runtime attach.
+serve binds loopback only. Grok adapter lists ~/.grok/sessions and attaches
+via ACP (existing leader, or grok agent serve on resume). Codex/Claude are stubs.
 `)
 }
 
@@ -61,7 +62,7 @@ func runServe(args []string) int {
 		fmt.Fprintf(os.Stderr, "huginn: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(os.Stderr, "huginn: listening on %s (skeleton; adapters stubbed)\n", srv.Addr())
+	fmt.Fprintf(os.Stderr, "huginn: listening on %s\n", srv.Addr())
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		fmt.Fprintf(os.Stderr, "huginn: %v\n", err)
 		return 1
