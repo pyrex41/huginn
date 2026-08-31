@@ -1,8 +1,12 @@
 {
   "mcpServers": {
     "huginn": {
-      "command": "plugins/huginn-channel/run-channel",
-      "args": [],
+      "type": "stdio",
+      "command": "/bin/sh",
+      "args": [
+        "-c",
+        "root=$(git rev-parse --show-toplevel 2>/dev/null || pwd); exec \"$root/plugins/huginn-channel/run-channel\""
+      ],
       "env": {
         "HUGINN_ADDR": "127.0.0.1:7419"
       }

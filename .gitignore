@@ -4,4 +4,5 @@
 /dist/
 plugins/huginn-channel/bin/
 .huginn-token
+.claude/settings.local.json
 

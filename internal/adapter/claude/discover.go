@@ -13,11 +13,12 @@ import (
 )
 
 // liveFile is ~/.claude/sessions/<pid>.json. Pointers only; not a transcript.
+// startedAt/updatedAt are numbers on disk; do not bind them as strings or
+// Unmarshal skips the whole live row (then grokbot only sees resumable JSONL).
 type liveFile struct {
 	PID                 int    `json:"pid"`
 	SessionID           string `json:"sessionId"`
 	CWD                 string `json:"cwd"`
-	StartedAt           string `json:"startedAt"`
 	Version             string `json:"version"`
 	Kind                string `json:"kind"`
 	Entrypoint          string `json:"entrypoint"`

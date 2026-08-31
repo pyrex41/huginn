@@ -13,6 +13,39 @@ import (
 	"github.com/pyrex41/huginn/internal/adapter"
 )
 
+func TestListLiveNumericStartedAt(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, "sessions")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(`{"pid":57062,"sessionId":"4c1b00e1-live","cwd":"/Users/reuben/projects/huginn","startedAt":1788208470000,"name":"hugin-test","kind":"interactive"}`)
+	if err := os.WriteFile(filepath.Join(dir, "57062.json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := NewWith(Config{
+		Home:      home,
+		Hostname:  "testhost",
+		IsLivePID: func(pid int) bool { return pid == 57062 },
+	})
+	ss, err := a.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ss) != 1 {
+		t.Fatalf("%+v", ss)
+	}
+	if ss[0].ID != "4c1b00e1-live" || ss[0].Liveness != adapter.LivenessLive {
+		t.Fatalf("%+v", ss[0])
+	}
+	if ss[0].Title != "hugin-test" || ss[0].CWD != "/Users/reuben/projects/huginn" {
+		t.Fatalf("%+v", ss[0])
+	}
+	if ss[0].Adapter != "claude-channel-unattached" {
+		t.Fatalf("adapter %+v", ss[0])
+	}
+}
+
 func TestListLiveVsResumable(t *testing.T) {
 	home := t.TempDir()
 	writeLive(t, home, 4242, "sess-live", "/tmp/proj", "Live TUI")
