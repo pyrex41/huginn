@@ -151,8 +151,10 @@ func newPlugin(cfg PluginConfig) (*plugin, error) {
 		client:    cli,
 		sessionID: strings.TrimSpace(cfg.SessionID),
 	}
-	if p.sessionID == "" {
-		p.sessionID = lookupSessionID(cfg.Home, cfg.PID)
+	// ~/.claude/sessions/<pid>.json is the live TUI id. Env can be a stale
+	// resume id (we registered 22b54e28 while the TUI was 71aad75c).
+	if fileID := lookupSessionID(cfg.Home, cfg.PID); fileID != "" {
+		p.sessionID = fileID
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/inject", p.handleInject)
@@ -389,17 +391,14 @@ func (p *plugin) registerLoop(ctx context.Context) {
 }
 
 func (p *plugin) registerOnce(ctx context.Context) error {
+	if found := lookupSessionID(p.cfg.Home, p.cfg.PID); found != "" {
+		p.mu.Lock()
+		p.sessionID = found
+		p.mu.Unlock()
+	}
 	p.mu.Lock()
 	sid := p.sessionID
 	p.mu.Unlock()
-	if sid == "" {
-		if found := lookupSessionID(p.cfg.Home, p.cfg.PID); found != "" {
-			sid = found
-			p.mu.Lock()
-			p.sessionID = sid
-			p.mu.Unlock()
-		}
-	}
 	payload, _ := json.Marshal(RegisterRequest{
 		SessionID: sid,
 		PID:       p.cfg.PID,

@@ -38,8 +38,8 @@ func TestMCPInitializeChannelNoPermission(t *testing.T) {
 	if !strings.Contains(string(raw), `"claude/channel"`) {
 		t.Fatalf("missing claude/channel: %s", raw)
 	}
-	if !strings.Contains(string(raw), mcpLegacyVersion) {
-		t.Fatalf("must not negotiate %s: %s", mcpBlockedRev, raw)
+	if !strings.Contains(string(raw), mcpBlockedRev) {
+		t.Fatalf("must echo client protocol %s so Claude Code does not drop MCP: %s", mcpBlockedRev, raw)
 	}
 	var resp rpcResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
@@ -295,8 +295,11 @@ func postJSON(t *testing.T, cli *http.Client, url, token string, body any) (int,
 }
 
 func TestPickProtocolVersion(t *testing.T) {
-	if pickProtocolVersion(mcpBlockedRev) != mcpLegacyVersion {
-		t.Fatal("2026-07-28 cannot carry channel messages")
+	if pickProtocolVersion(mcpBlockedRev) != mcpBlockedRev {
+		t.Fatal("echo 2026-07-28 so Claude Code 2.1 keeps the MCP process")
+	}
+	if pickProtocolVersion("") != mcpLegacyVersion {
+		t.Fatal("empty request still uses 2024-11-05")
 	}
 }
 

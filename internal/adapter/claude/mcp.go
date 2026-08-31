@@ -14,7 +14,6 @@ import (
 )
 
 // MCP stdio uses LSP Content-Length framing. NDJSON is accepted on read for tests.
-// Do not negotiate protocol revision 2026-07-28; it cannot carry channel messages.
 
 const (
 	mcpLegacyVersion = "2024-11-05"
@@ -189,7 +188,11 @@ func isEOFWithData(err error, line []byte) bool {
 }
 
 func pickProtocolVersion(requested string) string {
-	if requested == "" || requested == mcpBlockedRev {
+	// Echo the client's revision. Claude Code 2.1.x sends 2026-07-28 and
+	// drops the MCP process if we answer 2024-11-05 (30s timeout, then
+	// stale inject ports). Channel notifications still go out as
+	// notifications/claude/channel; the sidecar inject path is HTTP.
+	if strings.TrimSpace(requested) == "" {
 		return mcpLegacyVersion
 	}
 	return requested
