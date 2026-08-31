@@ -1,0 +1,14 @@
+package claude
+
+import (
+	"os/exec"
+	"testing"
+)
+
+// TestClaudeBinaryOptional records whether a real Claude CLI is on PATH.
+// It does not spawn a TUI, PTY, or Remote Control session.
+func TestClaudeBinaryOptional(t *testing.T) {
+	if _, err := exec.LookPath("claude"); err != nil {
+		t.Skip("claude not installed; channel plugin unproven against a live TUI")
+	}
+}

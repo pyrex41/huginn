@@ -46,7 +46,8 @@ Environment:
 
 serve binds loopback only. Grok attaches via ACP. Codex attaches as a second
 JSON-RPC client on a live app-server unix/loopback socket (codex --remote).
-Claude is a stub.
+Claude live-join is the huginn MCP channel plugin (not claude -p, not Remote Control):
+  claude --dangerously-load-development-channels server:huginn
 `)
 }
 

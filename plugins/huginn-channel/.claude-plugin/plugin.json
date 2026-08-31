@@ -1,0 +1,7 @@
+{
+  "name": "huginn",
+  "description": "Huginn channel: grokbot injects into this live Claude Code TUI via the host sidecar. Not Remote Control, not claude -p.",
+  "version": "0.1.0",
+  "keywords": ["huginn", "channel", "mcp", "grokbot"],
+  "channels": [{ "server": "huginn" }]
+}

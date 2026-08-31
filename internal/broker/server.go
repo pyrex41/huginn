@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/pyrex41/huginn/internal/adapter"
+	"github.com/pyrex41/huginn/internal/adapter/claude"
 	"github.com/pyrex41/huginn/internal/discover"
 )
 
@@ -45,7 +46,7 @@ func New(cfg Config) (*Server, error) {
 	}
 	host := cfg.Host
 	if host == nil {
-		host = discover.New()
+		host = discover.NewWithToken(cfg.Token)
 	}
 	s := &Server{bind: bind, token: cfg.Token, host: host}
 	s.http = &http.Server{
@@ -59,6 +60,9 @@ func (s *Server) Addr() string { return s.bind }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/plugin/claude/register", s.pluginRegister)
+	mux.HandleFunc("/plugin/claude/heartbeat", s.pluginRegister)
+	mux.HandleFunc("/plugin/claude/reply", s.pluginReply)
 	mux.HandleFunc("/", s.serveRPC)
 	return mux
 }
@@ -245,6 +249,74 @@ func (s *Server) permission(ctx context.Context, req request) response {
 		res.Outcome = adapter.OutcomeDeny
 	}
 	return resultResponse(req.ID, res)
+}
+
+func (s *Server) pluginHub() *claude.Hub {
+	if s.host == nil {
+		return nil
+	}
+	return s.host.Claude
+}
+
+func (s *Server) pluginRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.authorized(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	hub := s.pluginHub()
+	if hub == nil {
+		http.Error(w, "claude hub unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxRPCBytes+1))
+	if err != nil || len(body) > maxRPCBytes {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	var req claude.RegisterRequest
+	if json.Unmarshal(body, &req) != nil {
+		http.Error(w, "parse error", http.StatusBadRequest)
+		return
+	}
+	if err := hub.Register(req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+}
+
+func (s *Server) pluginReply(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.authorized(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	hub := s.pluginHub()
+	if hub == nil {
+		http.Error(w, "claude hub unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxRPCBytes+1))
+	if err != nil || len(body) > maxRPCBytes {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	var req claude.ReplyRequest
+	if json.Unmarshal(body, &req) != nil {
+		http.Error(w, "parse error", http.StatusBadRequest)
+		return
+	}
+	hub.OnReply(req)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 }
 
 func decodeParams(raw json.RawMessage, dest any) error {

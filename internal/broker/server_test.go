@@ -104,6 +104,56 @@ func TestPermissionDefaultDeny(t *testing.T) {
 	}
 }
 
+func TestClaudePluginRegisterLoopbackAndAuth(t *testing.T) {
+	srv, err := New(Config{Bind: "127.0.0.1:0", Token: "test-token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	body := `{"session_id":"s1","pid":1,"cwd":"/tmp","listen":"0.0.0.0:9"}`
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/plugin/claude/register", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("non-loopback register status %d", resp.StatusCode)
+	}
+
+	body = `{"session_id":"s1","pid":1,"cwd":"/tmp","listen":"127.0.0.1:9"}`
+	req, _ = http.NewRequest(http.MethodPost, ts.URL+"/plugin/claude/register", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("missing token status %d", resp.StatusCode)
+	}
+
+	req, _ = http.NewRequest(http.MethodPost, ts.URL+"/plugin/claude/register", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d body=%s", resp.StatusCode, b)
+	}
+	if srv.host.Claude.Get("s1") == nil {
+		t.Fatal("expected registered plugin")
+	}
+}
+
 func TestUnknownMethod(t *testing.T) {
 	srv, err := New(Config{Bind: "127.0.0.1:0", Token: "test-token"})
 	if err != nil {

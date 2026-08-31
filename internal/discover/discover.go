@@ -11,24 +11,34 @@ import (
 
 // Host probes this machine for live vs resumable sessions.
 // Grok walks ~/.grok/sessions. Codex probes the app-server unix/loopback
-// socket (stdio is not the attach path). Claude is still a stub.
-// Does not copy transcripts.
+// socket (stdio is not the attach path). Claude lists ~/.claude/sessions
+// plus huginn channel plugin heartbeats. Does not copy transcripts.
 type Host struct {
 	adapters []adapter.Adapter
+	Claude   *claude.Hub
 }
 
 func New() *Host {
-	return &Host{
-		adapters: []adapter.Adapter{
-			grok.New(),
-			codex.New(),
-			claude.New(),
-		},
-	}
+	return NewWithToken("")
+}
+
+func NewWithToken(token string) *Host {
+	hub := claude.NewHub()
+	return NewWith(
+		grok.New(),
+		codex.New(),
+		claude.NewWith(claude.Config{Hub: hub, Token: token}),
+	)
 }
 
 func NewWith(adapters ...adapter.Adapter) *Host {
-	return &Host{adapters: adapters}
+	h := &Host{adapters: adapters}
+	for _, a := range adapters {
+		if c, ok := a.(*claude.Adapter); ok {
+			h.Claude = c.Hub()
+		}
+	}
+	return h
 }
 
 func (h *Host) Adapters() []adapter.Adapter {

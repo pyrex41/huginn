@@ -1,0 +1,12 @@
+#!/bin/sh
+# Spawned by Claude Code as an MCP stdio channel. Loopback inject only.
+set -eu
+root=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+if [ -x "$root/bin/huginn-channel" ]; then
+  exec "$root/bin/huginn-channel" "$@"
+fi
+if command -v huginn-channel >/dev/null 2>&1; then
+  exec huginn-channel "$@"
+fi
+echo "huginn-channel: binary not found; build with: make build" >&2
+exit 1

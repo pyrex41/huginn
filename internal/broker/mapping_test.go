@@ -170,6 +170,54 @@ func TestBrokerMapsCodexSession(t *testing.T) {
 	}
 }
 
+func TestBrokerMapsClaudeChannelWatch(t *testing.T) {
+	fake := &mapAdapter{
+		sessions: []adapter.Session{{
+			Runtime:      adapter.RuntimeClaude,
+			ID:           "claude-sess",
+			Liveness:     adapter.LivenessLive,
+			Adapter:      "claude-channel",
+			Capabilities: []adapter.Capability{adapter.CapPrompt, adapter.CapWatch},
+		}},
+		updates: []adapter.Update{{
+			SessionID: "claude-sess",
+			Kind:      "ChannelWatch",
+			Payload:   map[string]any{"chat_id": "c1", "text": "pong"},
+		}},
+		stop: adapter.StopEndTurn,
+	}
+	srv, err := New(Config{
+		Bind:  "127.0.0.1:0",
+		Token: "test-token",
+		Host:  discover.NewWith(fake),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := call(t, srv, "test-token", MethodPrompt, map[string]any{
+		"sessionId": "claude-sess",
+		"prompt":    []map[string]string{{"type": "text", "text": "hi"}},
+	})
+	if got.Error != nil {
+		t.Fatalf("prompt: %+v", got.Error)
+	}
+	got = call(t, srv, "test-token", MethodWatch, map[string]any{"sessionId": "claude-sess"})
+	if got.Error != nil {
+		t.Fatalf("watch: %+v", got.Error)
+	}
+	raw, _ := json.Marshal(got.Result)
+	if !strings.Contains(string(raw), `"ChannelWatch"`) {
+		t.Fatalf("watch %s", raw)
+	}
+	if strings.Contains(string(raw), `"session/update"`) {
+		t.Fatalf("claude watch must stay lossy ChannelWatch: %s", raw)
+	}
+	got = call(t, srv, "test-token", MethodInterrupt, map[string]any{"sessionId": "claude-sess"})
+	if got.Error != nil {
+		t.Fatalf("interrupt rpc: %+v", got.Error)
+	}
+}
+
 func TestBrokerPermissionDefaultDenyUnknownSession(t *testing.T) {
 	fake := &mapAdapter{permOut: adapter.OutcomeAllow}
 	srv, err := New(Config{

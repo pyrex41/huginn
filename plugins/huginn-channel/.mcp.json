@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "huginn": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/run-channel",
+      "args": []
+    }
+  }
+}
