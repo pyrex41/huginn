@@ -74,7 +74,7 @@ type Hub struct {
 	mu      sync.Mutex
 	plugins map[string]*PluginReg
 	byPID   map[int]string
-	replies map[string][]adapter.Update
+	buses   map[string]*adapter.Fanout
 	now     func() time.Time
 	client  *http.Client
 }
@@ -83,7 +83,7 @@ func NewHub() *Hub {
 	return &Hub{
 		plugins: make(map[string]*PluginReg),
 		byPID:   make(map[int]string),
-		replies: make(map[string][]adapter.Update),
+		buses:   make(map[string]*adapter.Fanout),
 		now:     time.Now,
 		client:  &http.Client{Timeout: 5 * time.Second},
 	}
@@ -233,21 +233,30 @@ func (h *Hub) OnReply(req ReplyRequest) {
 			SessionID: req.SessionID,
 		},
 	}
+	h.bus(req.SessionID).Push(u)
+}
+
+func (h *Hub) bus(sessionID string) *adapter.Fanout {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	buf := h.replies[req.SessionID]
-	if len(buf) >= bufLimit {
-		buf = buf[1:]
+	b := h.buses[sessionID]
+	if b == nil {
+		b = adapter.NewFanout(bufLimit)
+		h.buses[sessionID] = b
 	}
-	h.replies[req.SessionID] = append(buf, u)
+	return b
 }
 
 func (h *Hub) TakeWatch(sessionID string) []adapter.Update {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	buf := h.replies[sessionID]
-	delete(h.replies, sessionID)
-	return buf
+	return h.SnapshotWatch(sessionID)
+}
+
+func (h *Hub) SnapshotWatch(sessionID string) []adapter.Update {
+	return h.bus(sessionID).Snapshot()
+}
+
+func (h *Hub) SubscribeWatch(ctx context.Context, sessionID string) <-chan adapter.Update {
+	return h.bus(sessionID).Subscribe(ctx)
 }
 
 type ctxKey int

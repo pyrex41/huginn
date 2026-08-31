@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pyrex41/huginn/internal/adapter"
 )
@@ -183,7 +184,9 @@ func TestWatchChannelReply(t *testing.T) {
 	hub.Put(&PluginReg{SessionID: "sess-1", Listen: "127.0.0.1:9"})
 	hub.OnReply(ReplyRequest{SessionID: "sess-1", ChatID: "c1", Text: "pong"})
 	a := NewWith(Config{Home: t.TempDir(), Hub: hub})
-	ch, err := a.Watch(context.Background(), adapter.WatchRequest{SessionID: "sess-1"})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	ch, err := a.Watch(ctx, adapter.WatchRequest{SessionID: "sess-1"})
 	if err != nil {
 		t.Fatal(err)
 	}

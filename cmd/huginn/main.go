@@ -136,14 +136,11 @@ func rpcCall(addr, token, method string, params json.RawMessage) int {
 		return 1
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		fmt.Fprintf(os.Stderr, "huginn: HTTP %d\n%s\n", resp.StatusCode, body)
 		return 1
 	}
-	os.Stdout.Write(body)
-	if len(body) == 0 || body[len(body)-1] != '\n' {
-		fmt.Println()
-	}
+	_, _ = io.Copy(os.Stdout, resp.Body)
 	return 0
 }

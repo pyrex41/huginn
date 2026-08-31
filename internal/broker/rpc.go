@@ -70,6 +70,7 @@ type watchParams struct {
 	SessionID       string `json:"sessionId"`
 	Resume          bool   `json:"resume,omitempty"`
 	PermissionRelay bool   `json:"permissionRelay,omitempty"`
+	Snapshot        bool   `json:"snapshot,omitempty"`
 }
 
 type watchResult struct {

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/pyrex41/huginn/internal/adapter"
 )
 
 // TestLiveUnixDualClientHandshake talks to a real `codex app-server` if installed.
@@ -117,6 +119,17 @@ func TestLiveUnixDualClientHandshake(t *testing.T) {
 	_, err = c2.Call(ctx, "thread/resume", map[string]any{"threadId": started.Thread.ID})
 	if err != nil {
 		t.Logf("peer thread/resume after turn/start: %v", err)
+	}
+
+	// Huginn attach path: skip resume on no-rollout and still prompt as a second client.
+	// This is not `codex --remote` (human TUI); huginn does not exec that.
+	peer := NewWith(Config{Home: home, Bin: bin, Listen: listen})
+	_, perr := peer.Prompt(ctx, adapter.PromptRequest{
+		SessionID: started.Thread.ID,
+		Prompt:    []adapter.Content{{Type: "text", Text: "peer ping"}},
+	})
+	if perr != nil {
+		t.Logf("peer adapter prompt (no-rollout skip): %v", perr)
 	}
 }
 

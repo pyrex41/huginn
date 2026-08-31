@@ -126,6 +126,10 @@ func (s *Server) serveRPC(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logRPC(req.Method, req.Params)
+	if req.Method == MethodWatch {
+		s.handleWatch(w, r, req)
+		return
+	}
 	resp := s.dispatch(r.Context(), req)
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -181,29 +185,63 @@ func (s *Server) list(ctx context.Context, req request) response {
 	return resultResponse(req.ID, listResult{Sessions: inv.Sessions, Adapters: inv.Adapters})
 }
 
-func (s *Server) watch(ctx context.Context, req request) response {
+func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request, req request) {
 	var p watchParams
 	if err := decodeParams(req.Params, &p); err != nil {
-		return errorResponse(req.ID, CodeInvalidParams, "invalid params")
+		writeJSON(w, http.StatusOK, errorResponse(req.ID, CodeInvalidParams, "invalid params"))
+		return
 	}
 	if p.SessionID == "" {
-		return errorResponse(req.ID, CodeInvalidParams, "sessionId required")
+		writeJSON(w, http.StatusOK, errorResponse(req.ID, CodeInvalidParams, "sessionId required"))
+		return
 	}
-	ch, err := s.host.Watch(ctx, adapter.WatchRequest{
+	ch, err := s.host.Watch(r.Context(), adapter.WatchRequest{
 		SessionID:       p.SessionID,
 		Resume:          p.Resume,
 		PermissionRelay: p.PermissionRelay,
+		Snapshot:        p.Snapshot,
 	})
 	if err != nil {
-		return errorResponse(req.ID, CodeInternalError, err.Error())
+		writeJSON(w, http.StatusOK, errorResponse(req.ID, CodeInternalError, err.Error()))
+		return
 	}
-	updates := make([]any, 0)
+	if p.Snapshot {
+		updates := make([]any, 0)
+		if ch != nil {
+			for u := range ch {
+				updates = append(updates, u)
+			}
+		}
+		writeJSON(w, http.StatusOK, resultResponse(req.ID, watchResult{Updates: updates}))
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+	enc := json.NewEncoder(w)
 	if ch != nil {
 		for u := range ch {
-			updates = append(updates, u)
+			if err := enc.Encode(map[string]any{
+				"jsonrpc": jsonRPCVersion,
+				"method":  "session/update",
+				"params":  u,
+			}); err != nil {
+				return
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
 		}
 	}
-	return resultResponse(req.ID, watchResult{Updates: updates})
+	_ = enc.Encode(resultResponse(req.ID, watchResult{Updates: []any{}}))
+	if flusher != nil {
+		flusher.Flush()
+	}
+}
+
+func (s *Server) watch(ctx context.Context, req request) response {
+	// Unreachable for HTTP: handleWatch is used. Kept for dispatch completeness.
+	return errorResponse(req.ID, CodeInternalError, "watch must stream")
 }
 
 func (s *Server) prompt(ctx context.Context, req request) response {

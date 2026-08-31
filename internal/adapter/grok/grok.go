@@ -63,7 +63,7 @@ type sessionState struct {
 	cwd             string
 	permissionRelay bool
 	loading         bool
-	buf             []adapter.Update
+	bus             *adapter.Fanout
 	pending         []pendingPerm
 }
 
@@ -210,16 +210,16 @@ func (a *Adapter) Watch(ctx context.Context, req adapter.WatchRequest) (<-chan a
 	if err != nil {
 		return nil, err
 	}
-	a.mu.Lock()
-	buf := st.buf
-	st.buf = nil
-	a.mu.Unlock()
-	ch := make(chan adapter.Update, len(buf)+1)
-	for _, u := range buf {
-		ch <- u
+	if req.Snapshot {
+		buf := st.bus.Snapshot()
+		ch := make(chan adapter.Update, len(buf)+1)
+		for _, u := range buf {
+			ch <- u
+		}
+		close(ch)
+		return ch, nil
 	}
-	close(ch)
-	return ch, nil
+	return st.bus.Subscribe(ctx), nil
 }
 
 func (a *Adapter) Interrupt(ctx context.Context, sessionID string) error {
@@ -384,8 +384,11 @@ func (a *Adapter) loadSession(ctx context.Context, sess adapter.Session, relay b
 	a.mu.Lock()
 	st := a.loaded[sess.ID]
 	if st == nil {
-		st = &sessionState{id: sess.ID, cwd: sess.CWD}
+		st = &sessionState{id: sess.ID, cwd: sess.CWD, bus: adapter.NewFanout(bufLimit)}
 		a.loaded[sess.ID] = st
+	}
+	if st.bus == nil {
+		st.bus = adapter.NewFanout(bufLimit)
 	}
 	st.loading = true
 	if relay {
@@ -467,13 +470,10 @@ func (a *Adapter) onNotify(method string, params json.RawMessage) {
 		}
 		a.mu.Lock()
 		st := a.loaded[p.SessionID]
-		if st != nil && !st.loading {
-			if len(st.buf) >= bufLimit {
-				st.buf = st.buf[1:]
-			}
-			st.buf = append(st.buf, u)
-		}
 		a.mu.Unlock()
+		if st != nil && !st.loading {
+			st.bus.Push(u)
+		}
 	case "x.ai/session_notification":
 		var p struct {
 			SessionID string `json:"sessionId"`
@@ -484,10 +484,11 @@ func (a *Adapter) onNotify(method string, params json.RawMessage) {
 		}
 		u := adapter.Update{SessionID: p.SessionID, Kind: "x.ai/session_notification", Payload: json.RawMessage(params)}
 		a.mu.Lock()
-		if st := a.loaded[p.SessionID]; st != nil && !st.loading {
-			st.buf = append(st.buf, u)
-		}
+		st := a.loaded[p.SessionID]
 		a.mu.Unlock()
+		if st != nil && !st.loading {
+			st.bus.Push(u)
+		}
 	}
 }
 
@@ -514,7 +515,7 @@ func (a *Adapter) onRequest(id json.RawMessage, method string, params json.RawMe
 		_ = c.Reply(id, permissionSelected(opt))
 		return
 	}
-	st.buf = append(st.buf, adapter.Update{
+	st.bus.Push(adapter.Update{
 		SessionID: p.SessionID,
 		Kind:      "permission_request",
 		Payload:   json.RawMessage(params),

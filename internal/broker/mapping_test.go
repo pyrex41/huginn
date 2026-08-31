@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/pyrex41/huginn/internal/adapter"
 	"github.com/pyrex41/huginn/internal/discover"
@@ -112,7 +115,7 @@ func TestBrokerMapsGrokPromptWatchInterrupt(t *testing.T) {
 		t.Fatalf("content %+v", fake.prompts[0].Prompt)
 	}
 
-	got = call(t, srv, "test-token", MethodWatch, map[string]any{"sessionId": "sess-acp"})
+	got = call(t, srv, "test-token", MethodWatch, map[string]any{"sessionId": "sess-acp", "snapshot": true})
 	if got.Error != nil {
 		t.Fatalf("watch: %+v", got.Error)
 	}
@@ -161,7 +164,7 @@ func TestBrokerMapsCodexSession(t *testing.T) {
 	if got.Error != nil {
 		t.Fatalf("prompt: %+v", got.Error)
 	}
-	got = call(t, srv, "test-token", MethodWatch, map[string]any{"sessionId": "thr_1"})
+	got = call(t, srv, "test-token", MethodWatch, map[string]any{"sessionId": "thr_1", "snapshot": true})
 	if got.Error != nil {
 		t.Fatalf("watch: %+v", got.Error)
 	}
@@ -202,7 +205,7 @@ func TestBrokerMapsClaudeChannelWatch(t *testing.T) {
 	if got.Error != nil {
 		t.Fatalf("prompt: %+v", got.Error)
 	}
-	got = call(t, srv, "test-token", MethodWatch, map[string]any{"sessionId": "claude-sess"})
+	got = call(t, srv, "test-token", MethodWatch, map[string]any{"sessionId": "claude-sess", "snapshot": true})
 	if got.Error != nil {
 		t.Fatalf("watch: %+v", got.Error)
 	}
@@ -284,6 +287,98 @@ type typedMap struct {
 
 func (t *typedMap) Runtime() adapter.Runtime { return t.runtime }
 func (t *typedMap) Name() string             { return t.name }
+
+type streamAdapter struct {
+	mapAdapter
+}
+
+func (s *streamAdapter) Watch(ctx context.Context, req adapter.WatchRequest) (<-chan adapter.Update, error) {
+	s.mu.Lock()
+	s.watches = append(s.watches, req)
+	up := append([]adapter.Update(nil), s.updates...)
+	s.mu.Unlock()
+	if req.Snapshot {
+		ch := make(chan adapter.Update, len(up)+1)
+		for _, u := range up {
+			ch <- u
+		}
+		close(ch)
+		return ch, nil
+	}
+	ch := make(chan adapter.Update, len(up)+1)
+	go func() {
+		defer close(ch)
+		for _, u := range up {
+			select {
+			case <-ctx.Done():
+				return
+			case ch <- u:
+			}
+		}
+		<-ctx.Done()
+	}()
+	return ch, nil
+}
+
+func TestBrokerWatchStreamsNDJSON(t *testing.T) {
+	fake := &streamAdapter{mapAdapter: mapAdapter{
+		sessions: []adapter.Session{{
+			ID: "sess-acp", Runtime: adapter.RuntimeGrok, Adapter: "grok-acp-leader",
+			Liveness: adapter.LivenessLive, Join: adapter.JoinACPLoad,
+		}},
+		updates: []adapter.Update{{
+			SessionID: "sess-acp",
+			Kind:      "agent_message_chunk",
+			Payload:   map[string]any{"sessionUpdate": "agent_message_chunk"},
+		}},
+	}}
+	srv, err := New(Config{Bind: "127.0.0.1:0", Token: "test-token", Host: discover.NewWith(fake)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	payload, _ := json.Marshal(map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": MethodWatch,
+		"params": map[string]any{"sessionId": "sess-acp"},
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL, strings.NewReader(string(payload)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "ndjson") {
+		t.Fatalf("content-type %s", ct)
+	}
+	dec := json.NewDecoder(resp.Body)
+	var saw bool
+	for {
+		var line map[string]any
+		if err := dec.Decode(&line); err != nil {
+			break
+		}
+		if line["method"] == "session/update" {
+			raw, _ := json.Marshal(line["params"])
+			if strings.Contains(string(raw), "agent_message_chunk") {
+				saw = true
+				cancel()
+				break
+			}
+		}
+	}
+	if !saw {
+		t.Fatal("expected streamed session/update")
+	}
+}
 
 func TestBrokerDoesNotLogPromptBodies(t *testing.T) {
 	var buf strings.Builder

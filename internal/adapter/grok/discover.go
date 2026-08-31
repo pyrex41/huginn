@@ -228,6 +228,9 @@ func processName(pid int) string {
 
 func defaultProbeLeader(ctx context.Context, home, bin string) LeaderStatus {
 	sock := filepath.Join(home, "leader.sock")
+	if v := strings.TrimSpace(os.Getenv("GROK_LEADER_SOCKET")); v != "" {
+		sock = v
+	}
 	st := LeaderStatus{Socket: sock}
 
 	if bin != "" {

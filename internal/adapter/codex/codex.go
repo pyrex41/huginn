@@ -58,7 +58,7 @@ type sessionState struct {
 	permissionRelay bool
 	status          string
 	activeTurnID    string
-	buf             []adapter.Update
+	bus             *adapter.Fanout
 	pending         []pendingPerm
 	turnWait        []chan turnResult
 }
@@ -254,16 +254,16 @@ func (a *Adapter) Watch(ctx context.Context, req adapter.WatchRequest) (<-chan a
 	if err != nil {
 		return nil, err
 	}
-	a.mu.Lock()
-	buf := st.buf
-	st.buf = nil
-	a.mu.Unlock()
-	ch := make(chan adapter.Update, len(buf)+1)
-	for _, u := range buf {
-		ch <- u
+	if req.Snapshot {
+		buf := st.bus.Snapshot()
+		ch := make(chan adapter.Update, len(buf)+1)
+		for _, u := range buf {
+			ch <- u
+		}
+		close(ch)
+		return ch, nil
 	}
-	close(ch)
-	return ch, nil
+	return st.bus.Subscribe(ctx), nil
 }
 
 func (a *Adapter) Interrupt(ctx context.Context, sessionID string) error {
@@ -439,8 +439,11 @@ func (a *Adapter) resumeThread(ctx context.Context, sess adapter.Session, relay 
 	a.mu.Lock()
 	st := a.loaded[sess.ID]
 	if st == nil {
-		st = &sessionState{id: sess.ID, cwd: sess.CWD}
+		st = &sessionState{id: sess.ID, cwd: sess.CWD, bus: adapter.NewFanout(bufLimit)}
 		a.loaded[sess.ID] = st
+	}
+	if st.bus == nil {
+		st.bus = adapter.NewFanout(bufLimit)
 	}
 	if relay {
 		st.permissionRelay = true
@@ -454,6 +457,12 @@ func (a *Adapter) resumeThread(ctx context.Context, sess adapter.Session, relay 
 	if err != nil {
 		if isActiveWriterErr(err) {
 			return nil, fmt.Errorf("%w: %v", adapter.ErrActiveWriter, err)
+		}
+		// In-memory app-server threads (thread/start, no on-disk rollout) show up in
+		// thread/loaded/list but thread/resume looks up the rollout. Stay attached
+		// without resume; that is not a TUI join.
+		if isNoRolloutErr(err) {
+			return st, nil
 		}
 		return nil, err
 	}
@@ -522,10 +531,7 @@ func (a *Adapter) onNotify(method string, params json.RawMessage) {
 	if st == nil {
 		return
 	}
-	if len(st.buf) >= bufLimit {
-		st.buf = st.buf[1:]
-	}
-	st.buf = append(st.buf, u)
+	st.bus.Push(u)
 }
 
 func (a *Adapter) onRequest(id json.RawMessage, method string, params json.RawMessage) {
@@ -560,7 +566,7 @@ func (a *Adapter) onRequest(id json.RawMessage, method string, params json.RawMe
 		a.mu.Unlock()
 		return
 	}
-	st.buf = append(st.buf, adapter.Update{
+	st.bus.Push(adapter.Update{
 		SessionID: tid,
 		Kind:      "permission_request",
 		Payload:   json.RawMessage(params),

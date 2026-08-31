@@ -185,7 +185,7 @@ func TestACPPromptAndWatchMapping(t *testing.T) {
 	if fake.promptText() != "hello from huginn" {
 		t.Fatalf("prompt mapping: %q", fake.promptText())
 	}
-	ch, err := a.Watch(ctx, adapter.WatchRequest{SessionID: "sess-acp"})
+	ch, err := a.Watch(ctx, adapter.WatchRequest{SessionID: "sess-acp", Snapshot: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,6 +198,56 @@ func TestACPPromptAndWatchMapping(t *testing.T) {
 	}
 	if !contains(kinds, "agent_message_chunk") {
 		t.Fatalf("kinds %v", kinds)
+	}
+}
+
+func TestWatchStreamsLateUpdates(t *testing.T) {
+	home := t.TempDir()
+	writeSummary(t, home, "sess-acp", "/tmp/p", "T")
+	writeJSON(t, filepath.Join(home, "active_sessions.json"), []activeRow{
+		{SessionID: "sess-acp", PID: 3, CWD: "/tmp/p"},
+	})
+	fake := newFakeAgent(t, fakeOpts{})
+	a := NewWith(Config{
+		Home:      home,
+		IsGrokPID: func(int) bool { return true },
+		ProbeLeader: func(context.Context) LeaderStatus {
+			return LeaderStatus{Reachable: true, Socket: "/tmp/leader.sock"}
+		},
+		StartLeader: fake.startLeader,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, err := a.Watch(ctx, adapter.WatchRequest{SessionID: "sess-acp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	errc := make(chan error, 1)
+	go func() {
+		_, err := a.Prompt(context.Background(), adapter.PromptRequest{
+			SessionID: "sess-acp",
+			Prompt:    []adapter.Content{{Type: "text", Text: "late"}},
+		})
+		errc <- err
+	}()
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("no live session/update")
+		case err := <-errc:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case u, ok := <-ch:
+			if !ok {
+				t.Fatal("watch closed early")
+			}
+			if u.Kind == "agent_message_chunk" {
+				cancel()
+				return
+			}
+		}
 	}
 }
 
@@ -237,7 +287,7 @@ func TestPermissionAllowOnceAndDefaultDeny(t *testing.T) {
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		ch, err := a.Watch(ctx, adapter.WatchRequest{SessionID: "sess-perm", PermissionRelay: true})
+		ch, err := a.Watch(ctx, adapter.WatchRequest{SessionID: "sess-perm", PermissionRelay: true, Snapshot: true})
 		if err != nil {
 			time.Sleep(10 * time.Millisecond)
 			continue

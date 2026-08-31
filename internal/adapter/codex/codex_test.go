@@ -134,7 +134,7 @@ func TestPromptAndWatchMapping(t *testing.T) {
 	if fake.sawOrigin {
 		t.Fatal("must not send Origin")
 	}
-	ch, err := a.Watch(ctx, adapter.WatchRequest{SessionID: "thr_1"})
+	ch, err := a.Watch(ctx, adapter.WatchRequest{SessionID: "thr_1", Snapshot: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestPermissionRelayAllow(t *testing.T) {
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		ch, err := a.Watch(ctx, adapter.WatchRequest{SessionID: "thr_perm", PermissionRelay: true})
+		ch, err := a.Watch(ctx, adapter.WatchRequest{SessionID: "thr_perm", PermissionRelay: true, Snapshot: true})
 		if err != nil {
 			time.Sleep(10 * time.Millisecond)
 			continue
@@ -308,6 +308,34 @@ func TestResumeSpawnsUnixListen(t *testing.T) {
 	}
 }
 
+func TestNoRolloutResumeStillAttaches(t *testing.T) {
+	fake := startFake(t, fakeOpts{noRollout: true})
+	fake.addThread("thr_mem", "/tmp/p", "T", true)
+	a := NewWith(Config{Home: t.TempDir(), Listen: fake.listenURL()})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := a.Prompt(ctx, adapter.PromptRequest{
+		SessionID: "thr_mem",
+		Prompt:    []adapter.Content{{Type: "text", Text: "ping"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StopReason != adapter.StopEndTurn {
+		t.Fatalf("%+v", res)
+	}
+}
+
+func TestCodexRemoteIsTUINotHuginnArgv(t *testing.T) {
+	// Human TUI is `codex --remote`. Huginn is an app-server client, not that TUI.
+	if got := attachArgvForbidden([]string{"--remote"}); got != "" {
+		t.Fatalf("remote is the TUI path, not forbidden on the TUI: %s", got)
+	}
+	if attachArgvForbidden([]string{"app-server", "--listen", "unix://"}) != "" {
+		t.Fatal("app-server listen is the attach path")
+	}
+}
+
 func TestArgvRejectsStdioAndPTY(t *testing.T) {
 	if got := attachArgvForbidden([]string{"app-server", "--listen", "unix://"}); got != "" {
 		t.Fatal(got)
@@ -346,7 +374,7 @@ func TestDualClientFanout(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	ch, err := a2.Watch(ctx, adapter.WatchRequest{SessionID: "thr_dual"})
+	ch, err := a2.Watch(ctx, adapter.WatchRequest{SessionID: "thr_dual", Snapshot: true})
 	if err != nil {
 		t.Fatal(err)
 	}

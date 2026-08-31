@@ -109,6 +109,8 @@ type WatchRequest struct {
 	SessionID       string `json:"sessionId"`
 	Resume          bool   `json:"resume,omitempty"`
 	PermissionRelay bool   `json:"permissionRelay,omitempty"`
+	// Snapshot drains the current buffer and closes. Default is a live stream.
+	Snapshot bool `json:"snapshot,omitempty"`
 }
 
 // Verdict is grokbot's permission decision. Maps to allow_once / reject_once.

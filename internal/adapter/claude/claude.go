@@ -169,13 +169,16 @@ func (a *Adapter) Watch(ctx context.Context, req adapter.WatchRequest) (<-chan a
 		}
 		return nil, adapter.ErrSessionNotFound
 	}
-	buf := a.hub.TakeWatch(req.SessionID)
-	ch := make(chan adapter.Update, len(buf)+1)
-	for _, u := range buf {
-		ch <- u
+	if req.Snapshot {
+		buf := a.hub.SnapshotWatch(req.SessionID)
+		ch := make(chan adapter.Update, len(buf)+1)
+		for _, u := range buf {
+			ch <- u
+		}
+		close(ch)
+		return ch, nil
 	}
-	close(ch)
-	return ch, nil
+	return a.hub.SubscribeWatch(ctx, req.SessionID), nil
 }
 
 func (a *Adapter) Interrupt(context.Context, string) error {

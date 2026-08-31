@@ -13,8 +13,9 @@ import (
 )
 
 type fakeOpts struct {
-	approval bool
-	foreign  map[string]bool
+	approval  bool
+	foreign   map[string]bool
+	noRollout bool
 }
 
 type fakeApp struct {
@@ -296,6 +297,16 @@ func (cl *fakeClient) dispatch(raw []byte) {
 
 func (cl *fakeClient) handleResume(id any, params map[string]any) {
 	tid, _ := params["threadId"].(string)
+	if cl.app.opts.noRollout {
+		cl.send(map[string]any{
+			"id": id,
+			"error": map[string]any{
+				"code":    -32600,
+				"message": "codex rpc: no rollout found for thread id " + tid + " (-32600)",
+			},
+		})
+		return
+	}
 	if cl.app.opts.foreign[tid] {
 		cl.send(map[string]any{
 			"id": id,
