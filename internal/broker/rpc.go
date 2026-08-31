@@ -1,6 +1,10 @@
 package broker
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/pyrex41/huginn/internal/adapter"
+)
 
 const jsonRPCVersion = "2.0"
 
@@ -58,7 +62,8 @@ func resultResponse(id json.RawMessage, result any) response {
 }
 
 type listResult struct {
-	Sessions any `json:"sessions"`
+	Sessions []adapter.Session `json:"sessions"`
+	Adapters []adapter.Health  `json:"adapters"`
 }
 
 type watchParams struct {

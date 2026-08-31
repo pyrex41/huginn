@@ -144,6 +144,10 @@ func NewWith(cfg Config) *Adapter {
 func (a *Adapter) Runtime() adapter.Runtime { return adapter.RuntimeGrok }
 func (a *Adapter) Name() string             { return "grok-acp" }
 
+func (a *Adapter) Probe(context.Context) error {
+	return probeRuntime(a.home, a.bin)
+}
+
 func (a *Adapter) List(context.Context) ([]adapter.Session, error) {
 	listed, _, err := a.cachedList()
 	if err != nil {

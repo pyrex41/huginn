@@ -23,6 +23,8 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		os.Exit(runServe(os.Args[2:]))
+	case "list":
+		os.Exit(runList(os.Args[2:]))
 	case "rpc":
 		os.Exit(runRPC(os.Args[2:]))
 	case "help", "-h", "--help":
@@ -39,6 +41,7 @@ func usage() {
 
 Usage:
   huginn serve [--bind 127.0.0.1:7419] [--token TOKEN]
+  huginn list [--addr 127.0.0.1:7419] [--token TOKEN]
   huginn rpc --token TOKEN [--addr 127.0.0.1:7419] METHOD [JSON_PARAMS]
 
 Environment:
@@ -72,6 +75,17 @@ func runServe(args []string) int {
 	return 0
 }
 
+func runList(args []string) int {
+	fs := flag.NewFlagSet("list", flag.ContinueOnError)
+	addr := fs.String("addr", defaultBind, "sidecar address")
+	token := fs.String("token", os.Getenv("HUGINN_TOKEN"), "auth token (or HUGINN_TOKEN)")
+	fs.SetOutput(os.Stderr)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	return rpcCall(*addr, *token, broker.MethodList, json.RawMessage(`{}`))
+}
+
 func runRPC(args []string) int {
 	fs := flag.NewFlagSet("rpc", flag.ContinueOnError)
 	addr := fs.String("addr", defaultBind, "sidecar address")
@@ -90,29 +104,32 @@ func runRPC(args []string) int {
 	if len(rest) > 1 {
 		params = json.RawMessage(rest[1])
 	}
-	if strings.TrimSpace(*token) == "" {
-		fmt.Fprintln(os.Stderr, "huginn rpc: --token or HUGINN_TOKEN required")
+	return rpcCall(*addr, *token, method, params)
+}
+
+func rpcCall(addr, token, method string, params json.RawMessage) int {
+	if strings.TrimSpace(token) == "" {
+		fmt.Fprintln(os.Stderr, "huginn: --token or HUGINN_TOKEN required")
 		return 2
 	}
-
 	payload, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
 		"method":  method,
-		"params":  json.RawMessage(params),
+		"params":  params,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "huginn: %v\n", err)
 		return 1
 	}
-	url := "http://" + *addr + "/"
+	url := "http://" + addr + "/"
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "huginn: %v\n", err)
 		return 1
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+*token)
+	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "huginn: %v\n", err)

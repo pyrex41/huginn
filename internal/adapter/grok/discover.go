@@ -3,6 +3,7 @@ package grok
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -83,13 +84,15 @@ func (a *Adapter) listSessions() ([]sessionRow, LeaderStatus, error) {
 		}
 		byID[sum.Info.ID] = &sessionRow{
 			sess: adapter.Session{
-				Host:     a.hostname,
-				Runtime:  adapter.RuntimeGrok,
-				ID:       sum.Info.ID,
-				CWD:      sum.Info.CWD,
-				Title:    title,
-				Liveness: adapter.LivenessResumable,
-				Adapter:  a.Name(),
+				Host:         a.hostname,
+				Runtime:      adapter.RuntimeGrok,
+				ID:           sum.Info.ID,
+				CWD:          sum.Info.CWD,
+				Title:        title,
+				Liveness:     adapter.LivenessResumable,
+				Adapter:      a.Name(),
+				Join:         adapter.JoinNone,
+				Capabilities: []adapter.Capability{},
 			},
 		}
 		return nil
@@ -107,12 +110,14 @@ func (a *Adapter) listSessions() ([]sessionRow, LeaderStatus, error) {
 				if !ok {
 					ent = &sessionRow{
 						sess: adapter.Session{
-							Host:     a.hostname,
-							Runtime:  adapter.RuntimeGrok,
-							ID:       row.SessionID,
-							CWD:      row.CWD,
-							Liveness: adapter.LivenessResumable,
-							Adapter:  a.Name(),
+							Host:         a.hostname,
+							Runtime:      adapter.RuntimeGrok,
+							ID:           row.SessionID,
+							CWD:          row.CWD,
+							Liveness:     adapter.LivenessResumable,
+							Adapter:      a.Name(),
+							Join:         adapter.JoinNone,
+							Capabilities: []adapter.Capability{},
 						},
 					}
 					byID[row.SessionID] = ent
@@ -142,12 +147,16 @@ func (a *Adapter) listSessions() ([]sessionRow, LeaderStatus, error) {
 		ent.sess.Capabilities = attachCaps(ent.sess.Liveness == adapter.LivenessLive, leader.Reachable, anyLive)
 		if leader.Reachable {
 			ent.sess.Adapter = "grok-acp-leader"
+			ent.sess.Join = adapter.JoinACPLoad
 		} else if ent.sess.Liveness == adapter.LivenessLive {
 			ent.sess.Adapter = "grok-acp-none"
+			ent.sess.Join = adapter.JoinNone
 		} else if !anyLive {
 			ent.sess.Adapter = "grok-acp-serve"
+			ent.sess.Join = adapter.JoinACPLoad
 		} else {
 			ent.sess.Adapter = "grok-acp-none"
+			ent.sess.Join = adapter.JoinNone
 		}
 		out = append(out, *ent)
 	}
@@ -158,16 +167,34 @@ func attachCaps(live, leader, anyLive bool) []adapter.Capability {
 	all := []adapter.Capability{
 		adapter.CapPrompt, adapter.CapWatch, adapter.CapInterrupt, adapter.CapPermission,
 	}
+	none := []adapter.Capability{}
 	if leader {
 		return all
 	}
 	if live {
-		return nil
+		return none
 	}
 	if !anyLive {
 		return all
 	}
-	return nil
+	return none
+}
+
+func probeRuntime(home, bin string) error {
+	if home != "" {
+		if _, err := os.Stat(home); err == nil {
+			return nil
+		}
+	}
+	if bin != "" {
+		if _, err := exec.LookPath(bin); err == nil {
+			return nil
+		}
+		if _, err := os.Stat(bin); err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("grok runtime missing")
 }
 
 func defaultIsGrokPID(pid int) bool {

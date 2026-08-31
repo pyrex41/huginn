@@ -126,6 +126,26 @@ func NewWith(cfg Config) *Adapter {
 func (a *Adapter) Runtime() adapter.Runtime { return adapter.RuntimeCodex }
 func (a *Adapter) Name() string             { return "codex-app-server" }
 
+func (a *Adapter) Probe(context.Context) error {
+	if a.home != "" {
+		if _, err := os.Stat(a.home); err == nil {
+			return nil
+		}
+	}
+	if a.bin != "" {
+		if _, err := exec.LookPath(a.bin); err == nil {
+			return nil
+		}
+		if _, err := os.Stat(a.bin); err == nil {
+			return nil
+		}
+	}
+	if a.listen != "" {
+		return nil
+	}
+	return fmt.Errorf("codex runtime missing")
+}
+
 func (a *Adapter) List(ctx context.Context) ([]adapter.Session, error) {
 	listed, _, err := a.cachedList(ctx)
 	if err != nil {

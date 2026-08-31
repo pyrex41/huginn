@@ -43,6 +43,9 @@ func TestListLiveVsResumable(t *testing.T) {
 	if live.Host != "testhost" || live.Runtime != adapter.RuntimeClaude {
 		t.Fatalf("row %+v", live)
 	}
+	if live.Join == adapter.JoinACPLoad || live.Join == "session/load" {
+		t.Fatalf("unattached claude is not session/load: %+v", live)
+	}
 	disk := byID["sess-disk"]
 	if disk.Liveness != adapter.LivenessResumable || disk.Adapter != "claude-resumable" {
 		t.Fatalf("resumable %+v", disk)
@@ -96,6 +99,9 @@ func TestListPluginAttachedAdvertisesPromptWatch(t *testing.T) {
 	}
 	if ss[0].Adapter != "claude-channel" || ss[0].Liveness != adapter.LivenessLive {
 		t.Fatalf("%+v", ss[0])
+	}
+	if ss[0].Join != adapter.JoinClaudeChannel {
+		t.Fatalf("channel attach must be claude-channel, not session/load: %+v", ss[0])
 	}
 	got := strings.Join(caps(ss[0].Capabilities), ",")
 	if got != "prompt,watch" {

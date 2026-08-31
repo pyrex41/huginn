@@ -29,6 +29,30 @@ const (
 	CapPermission Capability = "permission"
 )
 
+// Join is the native attach method. Claude channel inject is not ACP session/load.
+const (
+	JoinACPLoad       = "acp-session-load"
+	JoinCodexResume   = "codex-thread-resume"
+	JoinClaudeChannel = "claude-channel"
+	JoinNone          = "none"
+)
+
+// AdapterStatus is ok when the runtime is present, unknown when it is missing.
+type AdapterStatus string
+
+const (
+	StatusOK      AdapterStatus = "ok"
+	StatusUnknown AdapterStatus = "unknown"
+)
+
+// Health is one adapter's presence on this host. List still succeeds if unknown.
+type Health struct {
+	Runtime Runtime       `json:"runtime"`
+	Adapter string        `json:"adapter"`
+	Status  AdapterStatus `json:"status"`
+	Error   string        `json:"error,omitempty"`
+}
+
 // Session is a list row. Opaque labels may pass through; huginn does not
 // type Cluster/Pod/Harness.
 type Session struct {
@@ -39,6 +63,7 @@ type Session struct {
 	Title        string       `json:"title"`
 	Liveness     Liveness     `json:"liveness"`
 	Adapter      string       `json:"adapter"`
+	Join         string       `json:"join"`
 	Capabilities []Capability `json:"capabilities"`
 }
 
@@ -124,4 +149,10 @@ type Adapter interface {
 	Watch(ctx context.Context, req WatchRequest) (<-chan Update, error)
 	Interrupt(ctx context.Context, sessionID string) error
 	Permission(ctx context.Context, req PermissionRequest) (PermissionResult, error)
+}
+
+// Prober reports whether the runtime exists on this host. Missing runtimes
+// are UNKNOWN in session/list; they do not fail the sidecar.
+type Prober interface {
+	Probe(ctx context.Context) error
 }

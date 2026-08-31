@@ -45,16 +45,46 @@ func (h *Host) Adapters() []adapter.Adapter {
 	return h.adapters
 }
 
-func (h *Host) List(ctx context.Context) ([]adapter.Session, error) {
-	out := make([]adapter.Session, 0)
+// Inventory is session/list: rows plus per-adapter ok/unknown. Missing
+// runtimes do not fail the sidecar.
+type Inventory struct {
+	Sessions []adapter.Session `json:"sessions"`
+	Adapters []adapter.Health  `json:"adapters"`
+}
+
+func (h *Host) Inventory(ctx context.Context) Inventory {
+	inv := Inventory{
+		Sessions: make([]adapter.Session, 0),
+		Adapters: make([]adapter.Health, 0, len(h.adapters)),
+	}
 	for _, a := range h.adapters {
+		health := adapter.Health{
+			Runtime: a.Runtime(),
+			Adapter: a.Name(),
+			Status:  adapter.StatusOK,
+		}
+		if p, ok := a.(adapter.Prober); ok {
+			if err := p.Probe(ctx); err != nil {
+				health.Status = adapter.StatusUnknown
+				health.Error = err.Error()
+				inv.Adapters = append(inv.Adapters, health)
+				continue
+			}
+		}
 		ss, err := a.List(ctx)
 		if err != nil {
-			continue
+			health.Status = adapter.StatusUnknown
+			health.Error = err.Error()
+		} else {
+			inv.Sessions = append(inv.Sessions, ss...)
 		}
-		out = append(out, ss...)
+		inv.Adapters = append(inv.Adapters, health)
 	}
-	return out, nil
+	return inv
+}
+
+func (h *Host) List(ctx context.Context) ([]adapter.Session, error) {
+	return h.Inventory(ctx).Sessions, nil
 }
 
 func (h *Host) forSession(ctx context.Context, id string) adapter.Adapter {

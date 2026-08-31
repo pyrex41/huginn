@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -215,6 +216,103 @@ func TestBrokerMapsClaudeChannelWatch(t *testing.T) {
 	got = call(t, srv, "test-token", MethodInterrupt, map[string]any{"sessionId": "claude-sess"})
 	if got.Error != nil {
 		t.Fatalf("interrupt rpc: %+v", got.Error)
+	}
+}
+
+func TestBrokerListAcrossAdaptersHonestClaudeJoin(t *testing.T) {
+	host := discover.NewWith(
+		&mapAdapter{sessions: []adapter.Session{{
+			Host: "h", Runtime: adapter.RuntimeGrok, ID: "g1", CWD: "/g", Title: "G",
+			Liveness: adapter.LivenessLive, Adapter: "grok-acp-leader", Join: adapter.JoinACPLoad,
+			Capabilities: []adapter.Capability{adapter.CapPrompt, adapter.CapWatch, adapter.CapInterrupt, adapter.CapPermission},
+		}}},
+		&typedMap{mapAdapter: mapAdapter{sessions: []adapter.Session{{
+			Host: "h", Runtime: adapter.RuntimeCodex, ID: "t1", CWD: "/c", Title: "C",
+			Liveness: adapter.LivenessLive, Adapter: "codex-app-server", Join: adapter.JoinCodexResume,
+			Capabilities: []adapter.Capability{adapter.CapPrompt, adapter.CapWatch, adapter.CapInterrupt, adapter.CapPermission},
+		}}}, runtime: adapter.RuntimeCodex, name: "codex-app-server"},
+		&typedMap{mapAdapter: mapAdapter{sessions: []adapter.Session{{
+			Host: "h", Runtime: adapter.RuntimeClaude, ID: "cl1", CWD: "/cl", Title: "Cl",
+			Liveness: adapter.LivenessLive, Adapter: "claude-channel", Join: adapter.JoinClaudeChannel,
+			Capabilities: []adapter.Capability{adapter.CapPrompt, adapter.CapWatch},
+		}}}, runtime: adapter.RuntimeClaude, name: "claude-channel"},
+	)
+	srv, err := New(Config{Bind: "127.0.0.1:0", Token: "test-token", Host: host})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := call(t, srv, "test-token", MethodList, map[string]any{})
+	if got.Error != nil {
+		t.Fatalf("%+v", got.Error)
+	}
+	raw, _ := json.Marshal(got.Result)
+	for _, want := range []string{`"g1"`, `"t1"`, `"cl1"`, `"grok"`, `"codex"`, `"claude"`, `"live"`} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("missing %s in %s", want, raw)
+		}
+	}
+	var parsed struct {
+		Sessions []adapter.Session `json:"sessions"`
+		Adapters []adapter.Health  `json:"adapters"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Sessions) != 3 || len(parsed.Adapters) != 3 {
+		t.Fatalf("%s", raw)
+	}
+	for _, s := range parsed.Sessions {
+		if s.Host == "" || s.Runtime == "" || s.ID == "" || s.Adapter == "" || s.Liveness == "" || s.Join == "" {
+			t.Fatalf("incomplete row %+v", s)
+		}
+		if s.Runtime == adapter.RuntimeClaude {
+			if s.Join == adapter.JoinACPLoad || s.Join == "session/load" {
+				t.Fatalf("claude advertised session/load: %+v", s)
+			}
+			if s.Join != adapter.JoinClaudeChannel {
+				t.Fatalf("claude join %+v", s)
+			}
+		}
+	}
+}
+
+type typedMap struct {
+	mapAdapter
+	runtime adapter.Runtime
+	name    string
+}
+
+func (t *typedMap) Runtime() adapter.Runtime { return t.runtime }
+func (t *typedMap) Name() string             { return t.name }
+
+func TestBrokerDoesNotLogPromptBodies(t *testing.T) {
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	fake := &mapAdapter{sessions: []adapter.Session{{
+		ID: "sess-acp", Runtime: adapter.RuntimeGrok, Adapter: "grok-acp",
+		Liveness: adapter.LivenessLive, Join: adapter.JoinACPLoad,
+	}}}
+	srv, err := New(Config{Bind: "127.0.0.1:0", Token: "test-token", Host: discover.NewWith(fake)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := "DO_NOT_LOG_PROMPT_BODY"
+	got := call(t, srv, "test-token", MethodPrompt, map[string]any{
+		"sessionId": "sess-acp",
+		"prompt":    []map[string]string{{"type": "text", "text": secret}},
+	})
+	if got.Error != nil {
+		t.Fatalf("%+v", got.Error)
+	}
+	logs := buf.String()
+	if strings.Contains(logs, secret) {
+		t.Fatalf("prompt body logged: %s", logs)
+	}
+	if !strings.Contains(logs, "session/prompt") || !strings.Contains(logs, "sess-acp") {
+		t.Fatalf("expected method+sessionId log: %s", logs)
 	}
 }
 

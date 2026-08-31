@@ -2,7 +2,9 @@ package claude
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -70,6 +72,18 @@ func NewWith(cfg Config) *Adapter {
 func (a *Adapter) Runtime() adapter.Runtime { return adapter.RuntimeClaude }
 func (a *Adapter) Name() string             { return "claude-channel" }
 func (a *Adapter) Hub() *Hub                { return a.hub }
+
+func (a *Adapter) Probe(context.Context) error {
+	if a.home != "" {
+		if _, err := os.Stat(a.home); err == nil {
+			return nil
+		}
+	}
+	if _, err := exec.LookPath("claude"); err == nil {
+		return nil
+	}
+	return fmt.Errorf("claude runtime missing")
+}
 
 func (a *Adapter) List(context.Context) ([]adapter.Session, error) {
 	rows, err := a.cachedList()

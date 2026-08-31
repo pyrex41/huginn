@@ -46,7 +46,7 @@ func TestListLiveVsResumable(t *testing.T) {
 	if live.Liveness != adapter.LivenessLive {
 		t.Fatalf("live: %+v", live)
 	}
-	if live.Adapter != "grok-acp-none" || len(live.Capabilities) != 0 {
+	if live.Adapter != "grok-acp-none" || len(live.Capabilities) != 0 || live.Join != adapter.JoinNone {
 		t.Fatalf("leaderless live should be attach=none: %+v", live)
 	}
 	disk := byID["bbbb-disk"]
@@ -75,11 +75,22 @@ func TestListLeaderAdvertisesAttach(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ss) != 1 || ss[0].Adapter != "grok-acp-leader" {
+	if len(ss) != 1 || ss[0].Adapter != "grok-acp-leader" || ss[0].Join != adapter.JoinACPLoad {
 		t.Fatalf("%+v", ss)
 	}
 	if len(ss[0].Capabilities) != 4 {
 		t.Fatalf("caps %+v", ss[0].Capabilities)
+	}
+}
+
+func TestProbeMissingRuntime(t *testing.T) {
+	a := NewWith(Config{Home: filepath.Join(t.TempDir(), "nope"), Bin: filepath.Join(t.TempDir(), "no-grok")})
+	if err := a.Probe(context.Background()); err == nil {
+		t.Fatal("expected unknown")
+	}
+	ok := NewWith(Config{Home: t.TempDir(), Bin: "missing-on-purpose"})
+	if err := ok.Probe(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 

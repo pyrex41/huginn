@@ -68,19 +68,22 @@ func (a *Adapter) listSessions() ([]sessionRow, error) {
 			}
 			row := &sessionRow{
 				sess: adapter.Session{
-					Host:     a.hostname,
-					Runtime:  adapter.RuntimeClaude,
-					ID:       id,
-					CWD:      rec.CWD,
-					Title:    title,
-					Liveness: adapter.LivenessResumable,
-					Adapter:  "claude-resumable",
+					Host:         a.hostname,
+					Runtime:      adapter.RuntimeClaude,
+					ID:           id,
+					CWD:          rec.CWD,
+					Title:        title,
+					Liveness:     adapter.LivenessResumable,
+					Adapter:      "claude-resumable",
+					Join:         adapter.JoinNone,
+					Capabilities: []adapter.Capability{},
 				},
 				pid: pid,
 			}
 			if live {
 				row.sess.Liveness = adapter.LivenessLive
 				row.sess.Adapter = "claude-channel-unattached"
+				row.sess.Join = adapter.JoinNone
 			}
 			byID[id] = row
 		}
@@ -114,7 +117,8 @@ func (a *Adapter) listSessions() ([]sessionRow, error) {
 				CWD:          encoded,
 				Liveness:     adapter.LivenessResumable,
 				Adapter:      "claude-resumable",
-				Capabilities: nil,
+				Join:         adapter.JoinNone,
+				Capabilities: []adapter.Capability{},
 			},
 		}
 		return nil
@@ -144,6 +148,7 @@ func (a *Adapter) listSessions() ([]sessionRow, error) {
 		ent.sess.Adapter = a.Name()
 		ent.sess.Host = a.hostname
 		ent.sess.Runtime = adapter.RuntimeClaude
+		ent.sess.Join = adapter.JoinClaudeChannel
 		ent.sess.Capabilities = []adapter.Capability{adapter.CapPrompt, adapter.CapWatch}
 	}
 

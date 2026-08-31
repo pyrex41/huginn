@@ -84,6 +84,9 @@ func TestListWithToken(t *testing.T) {
 	if !bytes.Contains(raw, []byte(`"sessions"`)) {
 		t.Fatalf("expected sessions in result: %s", raw)
 	}
+	if !bytes.Contains(raw, []byte(`"adapters"`)) {
+		t.Fatalf("expected adapters in result: %s", raw)
+	}
 }
 
 func TestPermissionDefaultDeny(t *testing.T) {

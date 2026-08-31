@@ -29,11 +29,13 @@ func (a *Adapter) listSessions(ctx context.Context) ([]sessionRow, bool, error) 
 		for id := range locks {
 			out = append(out, sessionRow{
 				sess: adapter.Session{
-					Host:     a.hostname,
-					Runtime:  adapter.RuntimeCodex,
-					ID:       id,
-					Liveness: adapter.LivenessLive,
-					Adapter:  "codex-app-server-foreign",
+					Host:         a.hostname,
+					Runtime:      adapter.RuntimeCodex,
+					ID:           id,
+					Liveness:     adapter.LivenessLive,
+					Adapter:      "codex-app-server-foreign",
+					Join:         adapter.JoinNone,
+					Capabilities: []adapter.Capability{},
 				},
 				foreign: true,
 			})
@@ -132,19 +134,22 @@ func (a *Adapter) rowFromThread(th thread, loaded map[string]struct{}, locks map
 	}
 
 	sess := adapter.Session{
-		Host:     a.hostname,
-		Runtime:  adapter.RuntimeCodex,
-		ID:       th.ID,
-		CWD:      th.CWD,
-		Title:    titleOf(th),
-		Adapter:  a.Name(),
-		Liveness: adapter.LivenessResumable,
+		Host:         a.hostname,
+		Runtime:      adapter.RuntimeCodex,
+		ID:           th.ID,
+		CWD:          th.CWD,
+		Title:        titleOf(th),
+		Adapter:      a.Name(),
+		Join:         adapter.JoinCodexResume,
+		Liveness:     adapter.LivenessResumable,
+		Capabilities: []adapter.Capability{},
 	}
 	if live {
 		sess.Liveness = adapter.LivenessLive
 	}
 	if foreign {
 		sess.Adapter = "codex-app-server-foreign"
+		sess.Join = adapter.JoinNone
 	} else {
 		sess.Capabilities = allCaps()
 	}

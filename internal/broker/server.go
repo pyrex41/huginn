@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -124,6 +125,7 @@ func (s *Server) serveRPC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	logRPC(req.Method, req.Params)
 	resp := s.dispatch(r.Context(), req)
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -169,14 +171,14 @@ func (s *Server) dispatch(ctx context.Context, req request) response {
 }
 
 func (s *Server) list(ctx context.Context, req request) response {
-	sessions, err := s.host.List(ctx)
-	if err != nil {
-		return errorResponse(req.ID, CodeInternalError, "list failed")
+	inv := s.host.Inventory(ctx)
+	if inv.Sessions == nil {
+		inv.Sessions = []adapter.Session{}
 	}
-	if sessions == nil {
-		sessions = []adapter.Session{}
+	if inv.Adapters == nil {
+		inv.Adapters = []adapter.Health{}
 	}
-	return resultResponse(req.ID, listResult{Sessions: sessions})
+	return resultResponse(req.ID, listResult{Sessions: inv.Sessions, Adapters: inv.Adapters})
 }
 
 func (s *Server) watch(ctx context.Context, req request) response {
@@ -317,6 +319,29 @@ func (s *Server) pluginReply(w http.ResponseWriter, r *http.Request) {
 	hub.OnReply(req)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+}
+
+func logRPC(method string, params json.RawMessage) {
+	// Session ids only. Never prompt bodies, tool outputs, or file contents.
+	sid := sessionIDOf(params)
+	if sid != "" {
+		slog.Info("rpc", "method", method, "sessionId", sid)
+		return
+	}
+	slog.Info("rpc", "method", method)
+}
+
+func sessionIDOf(params json.RawMessage) string {
+	if len(params) == 0 {
+		return ""
+	}
+	var p struct {
+		SessionID string `json:"sessionId"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return ""
+	}
+	return p.SessionID
 }
 
 func decodeParams(raw json.RawMessage, dest any) error {
