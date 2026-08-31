@@ -128,7 +128,12 @@ func TestClaudePluginRegisterLoopbackAndAuth(t *testing.T) {
 		t.Fatalf("non-loopback register status %d", resp.StatusCode)
 	}
 
-	body = `{"session_id":"s1","pid":1,"cwd":"/tmp","listen":"127.0.0.1:9"}`
+	health := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(health.Close)
+	listen := strings.TrimPrefix(health.URL, "http://")
+	body = `{"session_id":"s1","pid":1,"cwd":"/tmp","listen":"` + listen + `"}`
 	req, _ = http.NewRequest(http.MethodPost, ts.URL+"/plugin/claude/register", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err = http.DefaultClient.Do(req)

@@ -127,6 +127,15 @@ func (a *Adapter) listSessions() ([]sessionRow, error) {
 
 	for _, reg := range a.hub.Live() {
 		ent, ok := byID[reg.SessionID]
+		if !ok && reg.PID > 0 {
+			for _, row := range byID {
+				if row.pid == reg.PID {
+					ent = row
+					ok = true
+					break
+				}
+			}
+		}
 		if !ok {
 			ent = &sessionRow{
 				sess: adapter.Session{

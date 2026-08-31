@@ -67,6 +67,7 @@ type PluginReg struct {
 	Listen    string
 	LastSeen  time.Time
 	Inject    func(ctx context.Context, req InjectRequest) error
+	testHook  bool
 }
 
 // Hub is the in-memory map of channel plugins. Not a transcript store.
@@ -132,6 +133,7 @@ func (h *Hub) Put(reg *PluginReg) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	reg.LastSeen = h.now()
+	reg.testHook = true
 	h.plugins[reg.SessionID] = reg
 	if reg.PID > 0 {
 		h.byPID[reg.PID] = reg.SessionID
@@ -144,32 +146,60 @@ func (h *Hub) Get(sessionID string) *PluginReg {
 	return h.getLocked(sessionID)
 }
 
+func (h *Hub) dropLocked(sessionID string, reg *PluginReg) {
+	delete(h.plugins, sessionID)
+	if reg != nil && reg.PID > 0 && h.byPID[reg.PID] == sessionID {
+		delete(h.byPID, reg.PID)
+	}
+}
+
 func (h *Hub) getLocked(sessionID string) *PluginReg {
 	reg := h.plugins[sessionID]
 	if reg == nil {
 		return nil
 	}
-	if h.now().Sub(reg.LastSeen) > pluginStaleAfter {
-		delete(h.plugins, sessionID)
-		if reg.PID > 0 && h.byPID[reg.PID] == sessionID {
-			delete(h.byPID, reg.PID)
-		}
+	if !h.regLive(reg) {
+		h.dropLocked(sessionID, reg)
 		return nil
 	}
 	return reg
 }
 
+func (h *Hub) regLive(reg *PluginReg) bool {
+	if h.now().Sub(reg.LastSeen) > pluginStaleAfter {
+		return false
+	}
+	if reg.testHook || reg.Inject != nil {
+		return true
+	}
+	return pluginListenAlive(h.client, reg.Listen)
+}
+
+func pluginListenAlive(cli *http.Client, listen string) bool {
+	if listen == "" || cli == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+listen+"/health", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := cli.Do(req)
+	if err != nil {
+		return false
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
 func (h *Hub) Live() []PluginReg {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	now := h.now()
 	out := make([]PluginReg, 0, len(h.plugins))
 	for id, reg := range h.plugins {
-		if now.Sub(reg.LastSeen) > pluginStaleAfter {
-			delete(h.plugins, id)
-			if reg.PID > 0 && h.byPID[reg.PID] == id {
-				delete(h.byPID, reg.PID)
-			}
+		if !h.regLive(reg) {
+			h.dropLocked(id, reg)
 			continue
 		}
 		out = append(out, *reg)

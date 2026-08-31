@@ -256,6 +256,27 @@ func TestPermissionDefaultDeny(t *testing.T) {
 	}
 }
 
+func TestHubLiveDropsDeadInjectPort(t *testing.T) {
+	h := NewHub()
+	if err := h.Register(RegisterRequest{SessionID: "dead", PID: 1, Listen: "127.0.0.1:1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.Live(); len(got) != 0 {
+		t.Fatalf("dead inject port still listed: %+v", got)
+	}
+	if h.Get("dead") != nil {
+		t.Fatal("Get must drop dead inject listener")
+	}
+}
+
+func TestLookupSessionIDReadsLiveFile(t *testing.T) {
+	home := t.TempDir()
+	writeLive(t, home, 42, "uuid-42", "/tmp", "n")
+	if got := lookupSessionID(home, 42); got != "uuid-42" {
+		t.Fatalf("%q", got)
+	}
+}
+
 func TestHubRefusesNonLoopbackListen(t *testing.T) {
 	h := NewHub()
 	if err := h.Register(RegisterRequest{SessionID: "s", Listen: "0.0.0.0:9"}); err == nil {

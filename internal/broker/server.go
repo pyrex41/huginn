@@ -326,6 +326,7 @@ func (s *Server) pluginRegister(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	slog.Info("claude plugin register", "sessionId", req.SessionID, "pid", req.PID, "listen", req.Listen)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 }

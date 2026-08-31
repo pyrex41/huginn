@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -62,6 +63,12 @@ func newMCPConn(in io.Reader, out io.Writer) *mcpConn {
 func (c *mcpConn) drain() {
 	for b := range c.writes {
 		_, _ = c.out.Write(b)
+		if f, ok := c.out.(interface{ Flush() error }); ok {
+			_ = f.Flush()
+		}
+		if f, ok := c.out.(*os.File); ok {
+			_ = f.Sync()
+		}
 	}
 }
 

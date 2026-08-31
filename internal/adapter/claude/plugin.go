@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -457,6 +458,25 @@ func lookupSessionID(home string, pid int) string {
 	if home == "" || pid <= 0 {
 		return ""
 	}
+	seen := map[int]struct{}{}
+	for i := 0; i < 8 && pid > 1; i++ {
+		if _, ok := seen[pid]; ok {
+			break
+		}
+		seen[pid] = struct{}{}
+		if id := sessionIDForPID(home, pid); id != "" {
+			return id
+		}
+		ppid := parentPID(pid)
+		if ppid <= 1 || ppid == pid {
+			break
+		}
+		pid = ppid
+	}
+	return ""
+}
+
+func sessionIDForPID(home string, pid int) string {
 	raw, err := os.ReadFile(filepath.Join(home, "sessions", strconv.Itoa(pid)+".json"))
 	if err != nil {
 		return ""
@@ -465,7 +485,28 @@ func lookupSessionID(home string, pid int) string {
 	if json.Unmarshal(raw, &rec) != nil {
 		return ""
 	}
-	return rec.SessionID
+	return strings.TrimSpace(rec.SessionID)
+}
+
+func parentPID(pid int) int {
+	if b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat"); err == nil {
+		// pid (comm) state ppid ...
+		s := string(b)
+		rparen := strings.LastIndex(s, ")")
+		if rparen >= 0 {
+			fields := strings.Fields(s[rparen+1:])
+			if len(fields) >= 2 {
+				n, _ := strconv.Atoi(fields[1])
+				return n
+			}
+		}
+	}
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "ppid=").Output()
+	if err != nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(string(out)))
+	return n
 }
 
 func splitCSV(s string) []string {
