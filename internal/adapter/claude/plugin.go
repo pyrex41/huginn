@@ -77,8 +77,11 @@ func Main(args []string) int {
 Spawned by Claude Code over stdio. Not a TUI, not PTY, not claude -p,
 not Agent SDK print-mode, not Remote Control.
 
-Enable (research preview, until allowlisted):
+Enable (research preview, until allowlisted). Needs project .mcp.json
+with mcpServers.huginn (this repo has one) and a Team Owner to set
+channelsEnabled, or a plan that allows channels (Max/Pro):
   claude --dangerously-load-development-channels server:huginn
+  # or, after plugin install: plugin:huginn
 
 Environment:
   HUGINN_TOKEN    shared secret with the sidecar (required for inject)

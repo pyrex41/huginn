@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "huginn": {
+      "command": "plugins/huginn-channel/run-channel",
+      "args": [],
+      "env": {
+        "HUGINN_ADDR": "127.0.0.1:7419"
+      }
+    }
+  }
+}

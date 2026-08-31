@@ -56,7 +56,8 @@ is a capability to reach the socket.
 
 Grok attaches via ACP. Codex attaches as a second JSON-RPC client on a live
 app-server unix/loopback socket (codex --remote).
-Claude live-join is the huginn MCP channel plugin (not claude -p, not Remote Control):
+Claude live-join is the huginn MCP channel plugin (not claude -p, not Remote Control).
+Project .mcp.json names the server huginn. Team/Enterprise need channelsEnabled.
   claude --dangerously-load-development-channels server:huginn
 `)
 }

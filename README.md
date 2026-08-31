@@ -111,6 +111,18 @@ upstream-shaped. Do not wrap the TUI in a PTY.
 POSTs to the sidecar; the sidecar emits channel notifications into the live
 session. Local UDS peer messaging is a later fan-out, not v1.
 
+This repo’s `.mcp.json` registers `server:huginn`. Team/Enterprise need an
+Owner to set `channelsEnabled`; Max/Pro can use the development flag:
+
+```
+make build
+claude --dangerously-load-development-channels server:huginn
+```
+
+`/status` must show the huginn MCP server connected, not “no MCP server
+configured with that name”. Export `HUGINN_TOKEN` (or write `.huginn-token`
+in the repo root, gitignored) so the plugin can register with the sidecar.
+
 Do **not** reverse-engineer Remote Control (`claude --remote-control`, the
 Anthropic WebSocket) as a grokbot client. That protocol is for claude.ai and
 the Claude app, stores transcripts on Anthropic servers, requires a
