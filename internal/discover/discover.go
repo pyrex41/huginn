@@ -10,7 +10,8 @@ import (
 )
 
 // Host probes this machine for live vs resumable sessions.
-// Grok walks ~/.grok/sessions; Codex/Claude are still stubs.
+// Grok walks ~/.grok/sessions. Codex probes the app-server unix/loopback
+// socket (stdio is not the attach path). Claude is still a stub.
 // Does not copy transcripts.
 type Host struct {
 	adapters []adapter.Adapter

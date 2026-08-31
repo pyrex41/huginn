@@ -44,8 +44,9 @@ Usage:
 Environment:
   HUGINN_TOKEN   sidecar secret (required if --token is omitted)
 
-serve binds loopback only. Grok adapter lists ~/.grok/sessions and attaches
-via ACP (existing leader, or grok agent serve on resume). Codex/Claude are stubs.
+serve binds loopback only. Grok attaches via ACP. Codex attaches as a second
+JSON-RPC client on a live app-server unix/loopback socket (codex --remote).
+Claude is a stub.
 `)
 }
 

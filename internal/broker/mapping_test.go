@@ -129,6 +129,47 @@ func TestBrokerMapsGrokPromptWatchInterrupt(t *testing.T) {
 	}
 }
 
+func TestBrokerMapsCodexSession(t *testing.T) {
+	fake := &mapAdapter{
+		sessions: []adapter.Session{{
+			Runtime:      adapter.RuntimeCodex,
+			ID:           "thr_1",
+			Liveness:     adapter.LivenessLive,
+			Adapter:      "codex-app-server",
+			Capabilities: []adapter.Capability{adapter.CapPrompt, adapter.CapWatch, adapter.CapInterrupt, adapter.CapPermission},
+		}},
+		updates: []adapter.Update{{
+			SessionID: "thr_1",
+			Kind:      "item/agentMessage/delta",
+			Payload:   map[string]any{"delta": "ok"},
+		}},
+		stop: adapter.StopEndTurn,
+	}
+	srv, err := New(Config{
+		Bind:  "127.0.0.1:0",
+		Token: "test-token",
+		Host:  discover.NewWith(fake),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := call(t, srv, "test-token", MethodPrompt, map[string]any{
+		"sessionId": "thr_1",
+		"prompt":    []map[string]string{{"type": "text", "text": "hi"}},
+	})
+	if got.Error != nil {
+		t.Fatalf("prompt: %+v", got.Error)
+	}
+	got = call(t, srv, "test-token", MethodWatch, map[string]any{"sessionId": "thr_1"})
+	if got.Error != nil {
+		t.Fatalf("watch: %+v", got.Error)
+	}
+	raw, _ := json.Marshal(got.Result)
+	if !strings.Contains(string(raw), `"item/agentMessage/delta"`) {
+		t.Fatalf("watch %s", raw)
+	}
+}
+
 func TestBrokerPermissionDefaultDenyUnknownSession(t *testing.T) {
 	fake := &mapAdapter{permOut: adapter.OutcomeAllow}
 	srv, err := New(Config{

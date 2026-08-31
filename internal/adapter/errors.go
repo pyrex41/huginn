@@ -10,4 +10,5 @@ var (
 	ErrAttachNone      = errors.New("blocked: live session has no leader (attach=none)")
 	ErrBlockedNoLive   = errors.New("blocked: no live session")
 	ErrResumeRequired  = errors.New("blocked: resume not requested")
+	ErrActiveWriter    = errors.New("blocked: thread already has an active writer")
 )
