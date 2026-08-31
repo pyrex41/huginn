@@ -1,0 +1,118 @@
+package adapter
+
+import "context"
+
+// Runtime names the coding-agent product on this host.
+type Runtime string
+
+const (
+	RuntimeGrok   Runtime = "grok"
+	RuntimeCodex  Runtime = "codex"
+	RuntimeClaude Runtime = "claude"
+)
+
+// Liveness is a first-class live vs resumable distinction.
+type Liveness string
+
+const (
+	LivenessLive      Liveness = "live"
+	LivenessResumable Liveness = "resumable"
+)
+
+// Capability is one of the five grokbot verbs an attach may advertise.
+type Capability string
+
+const (
+	CapPrompt     Capability = "prompt"
+	CapWatch      Capability = "watch"
+	CapInterrupt  Capability = "interrupt"
+	CapPermission Capability = "permission"
+)
+
+// Session is a list row. Opaque labels may pass through; huginn does not
+// type Cluster/Pod/Harness.
+type Session struct {
+	Host         string       `json:"host"`
+	Runtime      Runtime      `json:"runtime"`
+	ID           string       `json:"id"`
+	CWD          string       `json:"cwd"`
+	Title        string       `json:"title"`
+	Liveness     Liveness     `json:"liveness"`
+	Adapter      string       `json:"adapter"`
+	Capabilities []Capability `json:"capabilities"`
+}
+
+// Content is one prompt block. ACP-shaped; lossy mappings stay lossy.
+type Content struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+}
+
+// PromptRequest is session/prompt.
+type PromptRequest struct {
+	SessionID string    `json:"sessionId"`
+	Prompt    []Content `json:"prompt"`
+}
+
+// StopReason matches ACP session/prompt results.
+type StopReason string
+
+const (
+	StopEndTurn         StopReason = "end_turn"
+	StopMaxTokens       StopReason = "max_tokens"
+	StopMaxTurnRequests StopReason = "max_turn_requests"
+	StopRefusal         StopReason = "refusal"
+	StopCancelled       StopReason = "cancelled"
+)
+
+// PromptResult is the RPC result (stopReason only). Text is session/update.
+type PromptResult struct {
+	StopReason StopReason `json:"stopReason"`
+}
+
+// Update is a lossy watch event. Adapters keep native types in Payload.
+type Update struct {
+	SessionID string `json:"sessionId"`
+	Kind      string `json:"kind"`
+	Payload   any    `json:"payload,omitempty"`
+}
+
+// Verdict is grokbot's permission decision. Maps to allow_once / reject_once.
+type Verdict string
+
+const (
+	VerdictAllow Verdict = "allow"
+	VerdictDeny  Verdict = "deny"
+)
+
+// PermissionRequest is session/permission.
+type PermissionRequest struct {
+	SessionID string  `json:"sessionId"`
+	Verdict   Verdict `json:"verdict"`
+}
+
+// PermissionOutcome is deny-until-configured unless an attach opted in.
+type PermissionOutcome string
+
+const (
+	OutcomeDeny   PermissionOutcome = "deny"
+	OutcomeAllow  PermissionOutcome = "allow"
+	OutcomeCancel PermissionOutcome = "cancelled"
+)
+
+// PermissionResult is the RPC result for session/permission.
+type PermissionResult struct {
+	Outcome PermissionOutcome `json:"outcome"`
+}
+
+// Adapter is a native-protocol client. Stubs must not spawn PTYs or
+// reverse-engineer Claude Remote Control.
+type Adapter interface {
+	Runtime() Runtime
+	Name() string
+	List(ctx context.Context) ([]Session, error)
+	Prompt(ctx context.Context, req PromptRequest) (PromptResult, error)
+	Watch(ctx context.Context, sessionID string) (<-chan Update, error)
+	Interrupt(ctx context.Context, sessionID string) error
+	Permission(ctx context.Context, req PermissionRequest) (PermissionResult, error)
+}
