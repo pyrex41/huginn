@@ -126,8 +126,8 @@ One process per machine.
 
 - Bound to loopback by default.
 - Reachable from grokbot the same way other private host tools are: Tailscale
-  or an outbound-only relay the host dials. Huginn does not invent a hosted
-  control plane.
+  or an outbound-only relay the host dials. An optional Tailcat overlay is
+  later transport, not a hosted control plane. Huginn does not invent one.
 - Discovers by reading what the runtimes already write (Claude session
   registry + UDS, Codex app-server socket, Grok `~/.grok/sessions`) and by
   probing liveness. It does not require the human to advertise names.
@@ -137,6 +137,38 @@ One process per machine.
 
 Cross-host "sessions anywhere" is a registry of these sidecars, not a
 central session store.
+
+## Cross-host / overlay
+
+The five verbs stay the same. Transport is optional and sits *in front of*
+the loopback JSON-RPC server; it is not a sixth verb and it does not join
+Claude, Codex, or Grok TUIs.
+
+Prefer a real Tailscale tailnet for always-on enrolled machines. Use
+`huginn serve --tailcat` for one-shot / untrusted / no system-network
+changes: userspace WireGuard + magicsock + DERP, no Tailscale account, no
+TUN, no routing-table edits. The sidecar still binds `127.0.0.1`. Overlay
+clients still send `HUGINN_TOKEN` (or `--token`). The printed `tc…`
+ConnBlob is a bearer capability to *reach* that socket; without
+`--tailcat-allow nodekey:…` (repeatable; same as `tailcat serve --allow`)
+anyone who has the blob can dial it.
+
+A grokbot-side client dials the huginn port through the blob, then speaks
+the existing JSON-RPC:
+
+```
+# sidecar (stderr prints the tc… token; stdout is not JSON-RPC)
+HUGINN_TOKEN=… huginn serve --tailcat --tailcat-allow nodekey:…
+
+# client: TCP to the huginn port (default 7419) over the tunnel
+tailcat <tc-blob> 7419
+# or: tailcat socks <tc-blob> curl -H "Authorization: Bearer $HUGINN_TOKEN" \
+#       http://server.tailcat:7419/ …
+```
+
+Keys are ephemeral (`--key=new` semantics). Huginn does not silently reuse
+a saved default key. The Tailcat Go API has no stability promise; this repo
+pins `github.com/tailscale/tailcat` v0.3.0.
 
 ## What grokbot gets
 
@@ -208,7 +240,7 @@ for prompts and, if permission relay is on, for tool approval.
 
 - Loopback or private overlay only. No public listener.
 - Sidecar auth is a secret or device credential, not an unauthenticated
-  local port.
+  local port. A Tailcat `tc…` token does not replace `HUGINN_TOKEN`.
 - Claude channel path must sender-allowlist. An ungated channel is prompt
   injection into the developer's session.
 - Permission relay is opt-in per session. Anyone who can send a verdict can
@@ -235,7 +267,8 @@ runtime, not a mock.
 4. **Sidecar contract** — one process, `session/list` across the three
    adapters, auth on the grokbot socket.
 5. **Cross-host** — registry of sidecars over Tailscale or an outbound
-   relay. Last. Not a reason to build a controller first.
+   relay (optional Tailcat overlay is transport only). Last. Not a reason
+   to build a controller first.
 
 Finite bar for v1: from grokbot, list sessions on one enrolled machine,
 watch a live Grok turn, inject a prompt into that turn, inject into a live
@@ -249,6 +282,7 @@ into a PTY, v1 has failed.
 README.md          this document; the product is the pipe it describes
 cmd/huginn/        sidecar + debug CLI
 internal/broker/   the five verbs
+internal/overlay/  optional Tailcat transport (not a verb)
 internal/adapter/  grok, codex, claude — native protocols only
 internal/discover/ live vs resumable probes
 ```
