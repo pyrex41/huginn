@@ -218,6 +218,11 @@ grokbot cannot:
   attach, default deny-until-configured)
 - drive a session whose runtime is not installed on that host
 
+## Install
+
+`INSTALL.md` is the short path: one flake input, a hub, then each machine.
+The rest of this section is what the modules run underneath.
+
 ## Try the zmqcat mailbox transport
 
 `zmqcat` can own the durable mailbox and Tailcat transport while Huginn runs
