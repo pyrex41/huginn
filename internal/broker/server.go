@@ -16,7 +16,10 @@ import (
 	"github.com/pyrex41/huginn/internal/discover"
 )
 
-const maxRPCBytes = 1 << 20
+// MaxRPCBytes caps a single JSON-RPC request or response body.
+const MaxRPCBytes = 1 << 20
+
+const maxRPCBytes = MaxRPCBytes
 
 // Config for the loopback sidecar. Token is required. Bind must be loopback.
 type Config struct {
