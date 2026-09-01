@@ -258,6 +258,20 @@ with the printed Tailcat token on the Huginn host, and point Huginn at that
 join process's local socket. Huginn itself does not need a Tailcat flag in
 this topology.
 
+### Presence
+
+With `--zmqcat`, the sidecar announces itself on `huginn.presence.<service>`
+every 15s (`--zmqcat-presence-every`, or `--zmqcat-no-presence` to opt out).
+An orchestrator subscribes to the `huginn.presence.` prefix and zmqcat's
+last-value cache replays the most recent announcement per machine
+immediately, so a roster is available on connect rather than after a full
+interval on every host.
+
+The announcement is deliberately cheap — service, host, runtimes, bind,
+timestamp. It carries no session counts: presence runs on a timer, and
+counting sessions means walking thousands of files. Ask `session/list` with
+`{"liveness":"live"}` for that.
+
 ### What `--zmqcat` does to the trust boundary
 
 Over HTTP, every caller proves it holds `HUGINN_TOKEN`. Over zmqcat there is

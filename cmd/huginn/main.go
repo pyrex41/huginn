@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/pyrex41/huginn/internal/broker"
 	"github.com/pyrex41/huginn/internal/overlay"
@@ -45,7 +46,7 @@ func usage() {
 Usage:
   huginn serve [--bind 127.0.0.1:7419] [--token TOKEN] [--tailcat] [--tailcat-allow nodekey:…]
                [--zmqcat] [--zmqcat-listen ADDR] [--zmqcat-service NAME]
-               [--zmqcat-workers N]
+               [--zmqcat-workers N] [--zmqcat-no-presence]
   huginn list [--addr 127.0.0.1:7419] [--token TOKEN] [--liveness live|resumable]
               [--runtime grok|codex|claude] [--cwd PREFIX] [--limit N] [--cursor C]
   huginn rpc --token TOKEN [--addr 127.0.0.1:7419] METHOD [JSON_PARAMS]
@@ -67,14 +68,16 @@ Project .mcp.json names the server huginn. Team/Enterprise need channelsEnabled.
 }
 
 type serveOpts struct {
-	Bind       string
-	Token      string
-	Tailcat    bool
-	Allow      []string
-	ZMQCat     bool
-	ZMQListen  string
-	ZMQService string
-	ZMQWorkers int
+	Bind          string
+	Token         string
+	Tailcat       bool
+	Allow         []string
+	ZMQCat        bool
+	ZMQListen     string
+	ZMQService    string
+	ZMQWorkers    int
+	NoPresence    bool
+	PresenceEvery time.Duration
 }
 
 type stringList []string
@@ -95,6 +98,8 @@ func parseServe(args []string) (serveOpts, error) {
 	zmqListen := fs.String("zmqcat-listen", "", "zmqcat local sidecar address")
 	zmqService := fs.String("zmqcat-service", "huginn", "zmqcat service mailbox")
 	zmqWorkers := fs.Int("zmqcat-workers", defaultZMQWorkers, "concurrent zmqcat READY workers")
+	noPresence := fs.Bool("zmqcat-no-presence", false, "do not announce this sidecar on the bus")
+	presenceEvery := fs.Duration("zmqcat-presence-every", DefaultPresenceInterval, "presence announcement interval")
 	var allow stringList
 	fs.Var(&allow, "tailcat-allow", "repeatable nodekey:… allowlist (maps to tailcat serve --allow)")
 	fs.SetOutput(os.Stderr)
@@ -105,7 +110,7 @@ func parseServe(args []string) (serveOpts, error) {
 		Bind: *bind, Token: *token, Tailcat: *tailcat,
 		Allow: append([]string(nil), allow...), ZMQCat: *zmqEnabled,
 		ZMQListen: *zmqListen, ZMQService: strings.TrimSpace(*zmqService),
-		ZMQWorkers: *zmqWorkers,
+		ZMQWorkers: *zmqWorkers, NoPresence: *noPresence, PresenceEvery: *presenceEvery,
 	}
 	if len(opts.Allow) > 0 && !opts.Tailcat {
 		return serveOpts{}, fmt.Errorf("--tailcat-allow requires --tailcat")
@@ -152,6 +157,16 @@ func runServe(args []string) int {
 		}
 		defer worker.Close()
 		fmt.Fprintf(os.Stderr, "huginn: zmqcat READY service=%s listen=%s workers=%d\n", opts.ZMQService, displayZMQListen(opts.ZMQListen), opts.ZMQWorkers)
+
+		if !opts.NoPresence {
+			pres, err := startPresence(ctx, opts.ZMQListen, opts.ZMQService, actual, srv.Runtimes(), opts.PresenceEvery, logf)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "huginn: zmqcat presence: %v\n", err)
+				return 1
+			}
+			defer pres.Close()
+			fmt.Fprintf(os.Stderr, "huginn: announcing on %s%s\n", PresenceTopic, opts.ZMQService)
+		}
 	}
 
 	if opts.Tailcat {

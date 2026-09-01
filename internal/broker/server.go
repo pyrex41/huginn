@@ -74,6 +74,16 @@ func New(cfg Config) (*Server, error) {
 
 func (s *Server) Addr() string { return s.bind }
 
+// Runtimes names the runtimes this sidecar has adapters for. It does not
+// touch the session store, so it is safe to call on a timer.
+func (s *Server) Runtimes() []adapter.Runtime {
+	out := make([]adapter.Runtime, 0, 4)
+	for _, a := range s.host.Adapters() {
+		out = append(out, a.Runtime())
+	}
+	return out
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/plugin/claude/register", s.pluginRegister)
