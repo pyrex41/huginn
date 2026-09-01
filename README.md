@@ -200,6 +200,41 @@ grokbot cannot:
   attach, default deny-until-configured)
 - drive a session whose runtime is not installed on that host
 
+## Try the zmqcat mailbox transport
+
+`zmqcat` can own the durable mailbox and Tailcat transport while Huginn runs
+as a named READY worker. The existing HTTP API remains available; all methods
+except the streaming `session/watch` can also be sent as JSON-RPC request
+bodies over ZMQC.
+
+In one terminal, start a local durable bus:
+
+```sh
+cd ../zmqcat
+go build -o bin/zmqcat ./cmd/zmqcat
+bin/zmqcat serve --local --mailbox ./mailbox.json
+```
+
+In another terminal, attach Huginn to the default local zmqcat socket:
+
+```sh
+cd ../huginn
+make build
+HUGINN_TOKEN=dev-secret bin/huginn serve --zmqcat --zmqcat-service huginn.local
+```
+
+Then issue a session request through the mailbox:
+
+```sh
+../zmqcat/bin/zmqcat req huginn.local \
+  '{"jsonrpc":"2.0","id":1,"method":"session/list","params":{}}'
+```
+
+For a remote trial, remove `--local` from `zmqcat serve`, run `zmqcat join`
+with the printed Tailcat token on the Huginn host, and point Huginn at that
+join process's local socket. Huginn itself does not need a Tailcat flag in
+this topology.
+
 ## Relationship to other repos
 
 | Repo | Owns | Huginn does with it |
