@@ -11,23 +11,27 @@
     let
       systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
       forAll = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
+      # Aliased because `packages` re-exports an attribute named zmqcat: inside
+      # a rec set that name would resolve to itself, not to the input.
+      zmqcatFlake = zmqcat;
+      zmqcatFor = pkgs: zmqcatFlake.packages.${pkgs.stdenv.hostPlatform.system}.zmqcat;
     in
     {
       overlays.default = final: prev: {
         huginn = final.callPackage ./nix/package.nix { };
-        inherit (zmqcat.packages.${final.stdenv.hostPlatform.system}) zmqcat;
+        zmqcat = zmqcatFor final;
       };
 
       packages = forAll (pkgs: rec {
         huginn = pkgs.callPackage ./nix/package.nix { };
         # Re-exported so one flake input gets you both halves.
-        zmqcat = zmqcat.packages.${pkgs.stdenv.hostPlatform.system}.zmqcat;
+        zmqcat = zmqcatFor pkgs;
         default = huginn;
       });
 
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
-          packages = [ pkgs.go pkgs.gopls zmqcat.packages.${pkgs.stdenv.hostPlatform.system}.zmqcat ];
+          packages = [ pkgs.go pkgs.gopls (zmqcatFor pkgs) ];
         };
       });
 
@@ -41,13 +45,13 @@
       nixosModules.default = {
         imports = [
           (import ./nix/nixos-module.nix self)
-          zmqcat.nixosModules.default
+          zmqcatFlake.nixosModules.default
         ];
       };
       darwinModules.default = {
         imports = [
           (import ./nix/darwin-module.nix self)
-          zmqcat.darwinModules.default
+          zmqcatFlake.darwinModules.default
         ];
       };
 

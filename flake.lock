@@ -1,0 +1,48 @@
+{
+  "nodes": {
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1788179007,
+        "narHash": "sha256-hn1oU2rue2SYK8dAr8+WNZWtbsz1S2W5mnHlSEuh3bo=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "34ab99075ac4f7e40cf037eef32cb1c360bb85e9",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "nixpkgs": "nixpkgs",
+        "zmqcat": "zmqcat"
+      }
+    },
+    "zmqcat": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788301985,
+        "narHash": "sha256-4q2zb1z93MwOtNNRhBImVbTowQMpJbm6C/ty30D5/N8=",
+        "ref": "refs/heads/main",
+        "rev": "f47706107e1cfc531e0827333795506471efd927",
+        "revCount": 3,
+        "type": "git",
+        "url": "ssh://git@github.com/pyrex41/zmqcat"
+      },
+      "original": {
+        "type": "git",
+        "url": "ssh://git@github.com/pyrex41/zmqcat"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
