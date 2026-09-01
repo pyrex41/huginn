@@ -80,6 +80,24 @@ A list row names at least: host, runtime (`grok` | `codex` | `claude`),
 session id, cwd, title, live/resumable, adapter, capabilities
 (`prompt`, `watch`, `interrupt`, `permission`).
 
+`session/list` filters and pages, because a host accumulates every resumable
+conversation its runtimes ever wrote — thousands of rows, of which a handful
+are live:
+
+```
+{"liveness":"live","runtime":"grok","cwd":"/path/prefix","limit":200,"cursor":"…"}
+```
+
+`liveness`, `runtime`, and `cwd` are optional filters; `limit` defaults to 200
+and caps at 1000. The result carries `total` (everything matching the filter,
+not just this page) and `nextCursor` (empty on the last page). A caller that
+ignores both sees a short list, never a silently truncated one. The cursor is
+keyset, not an offset, so a session appearing or vanishing mid-walk does not
+shift the rows around it.
+
+Ask for `{"liveness":"live"}` when you mean "what is running right now" — that
+is a small response on any host. An unfiltered list is history.
+
 Adapters map:
 
 - Grok → ACP `session/new|load`, `session/prompt`, `session/update`,

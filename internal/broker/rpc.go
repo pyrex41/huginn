@@ -61,9 +61,25 @@ func resultResponse(id json.RawMessage, result any) response {
 	}
 }
 
+// listParams filters and pages session/list. A host accumulates every
+// resumable conversation the runtimes ever wrote, so returning all of them
+// unfiltered outgrows any single response envelope.
+type listParams struct {
+	Liveness string `json:"liveness,omitempty"` // live | resumable; empty means both
+	Runtime  string `json:"runtime,omitempty"`  // grok | codex | claude
+	CWD      string `json:"cwd,omitempty"`      // path prefix
+	Limit    int    `json:"limit,omitempty"`    // default DefaultListLimit, capped at MaxListLimit
+	Cursor   string `json:"cursor,omitempty"`   // opaque; from a previous nextCursor
+}
+
 type listResult struct {
 	Sessions []adapter.Session `json:"sessions"`
 	Adapters []adapter.Health  `json:"adapters"`
+	// Total counts everything matching the filter, not just this page.
+	Total int `json:"total"`
+	// NextCursor is empty on the last page. A caller that ignores it sees a
+	// short list, never a silently truncated one: Total says how many matched.
+	NextCursor string `json:"nextCursor,omitempty"`
 }
 
 type watchParams struct {

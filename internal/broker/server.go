@@ -3,12 +3,14 @@ package broker
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/pyrex41/huginn/internal/adapter"
@@ -18,6 +20,16 @@ import (
 
 // MaxRPCBytes caps a single JSON-RPC request or response body.
 const MaxRPCBytes = 1 << 20
+
+const (
+	// DefaultListLimit bounds an unparameterised session/list. A host
+	// accumulates thousands of resumable rows; returning all of them
+	// produces a response near MaxRPCBytes that no single zmqcat frame or
+	// MCP tool result can carry.
+	DefaultListLimit = 200
+	// MaxListLimit is the largest page a caller may ask for.
+	MaxListLimit = 1000
+)
 
 const maxRPCBytes = MaxRPCBytes
 
@@ -178,14 +190,100 @@ func (s *Server) dispatch(ctx context.Context, req request) response {
 }
 
 func (s *Server) list(ctx context.Context, req request) response {
-	inv := s.host.Inventory(ctx)
-	if inv.Sessions == nil {
-		inv.Sessions = []adapter.Session{}
+	var p listParams
+	if len(req.Params) > 0 {
+		if err := decodeParams(req.Params, &p); err != nil {
+			return errorResponse(req.ID, CodeInvalidParams, "invalid params")
+		}
 	}
+	switch p.Liveness {
+	case "", string(adapter.LivenessLive), string(adapter.LivenessResumable):
+	default:
+		return errorResponse(req.ID, CodeInvalidParams, "liveness must be live or resumable")
+	}
+	switch p.Runtime {
+	case "", string(adapter.RuntimeGrok), string(adapter.RuntimeCodex), string(adapter.RuntimeClaude):
+	default:
+		return errorResponse(req.ID, CodeInvalidParams, "unknown runtime")
+	}
+	after, err := decodeCursor(p.Cursor)
+	if err != nil {
+		return errorResponse(req.ID, CodeInvalidParams, "invalid cursor")
+	}
+
+	inv := s.host.Inventory(ctx)
 	if inv.Adapters == nil {
 		inv.Adapters = []adapter.Health{}
 	}
-	return resultResponse(req.ID, listResult{Sessions: inv.Sessions, Adapters: inv.Adapters})
+	matched := filterSessions(inv.Sessions, p)
+	// Sort so a cursor names a position that survives the next call, even
+	// though adapters enumerate their sessions in whatever order the
+	// filesystem hands them back.
+	sort.Slice(matched, func(i, j int) bool { return sessionKey(matched[i]) < sessionKey(matched[j]) })
+
+	page := make([]adapter.Session, 0, len(matched))
+	for _, sess := range matched {
+		if after != "" && sessionKey(sess) <= after {
+			continue
+		}
+		page = append(page, sess)
+	}
+	limit := p.Limit
+	if limit <= 0 {
+		limit = DefaultListLimit
+	}
+	if limit > MaxListLimit {
+		limit = MaxListLimit
+	}
+	next := ""
+	if len(page) > limit {
+		next = encodeCursor(sessionKey(page[limit-1]))
+		page = page[:limit]
+	}
+	return resultResponse(req.ID, listResult{
+		Sessions:   page,
+		Adapters:   inv.Adapters,
+		Total:      len(matched),
+		NextCursor: next,
+	})
+}
+
+func filterSessions(in []adapter.Session, p listParams) []adapter.Session {
+	out := make([]adapter.Session, 0, len(in))
+	for _, sess := range in {
+		if p.Liveness != "" && string(sess.Liveness) != p.Liveness {
+			continue
+		}
+		if p.Runtime != "" && string(sess.Runtime) != p.Runtime {
+			continue
+		}
+		if p.CWD != "" && !strings.HasPrefix(sess.CWD, p.CWD) {
+			continue
+		}
+		out = append(out, sess)
+	}
+	return out
+}
+
+// sessionKey orders a page. Runtime first so one runtime's rows stay
+// together; id breaks ties and is unique within a runtime.
+func sessionKey(s adapter.Session) string {
+	return string(s.Runtime) + "\x00" + s.ID
+}
+
+func encodeCursor(key string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(key))
+}
+
+func decodeCursor(cursor string) (string, error) {
+	if cursor == "" {
+		return "", nil
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request, req request) {

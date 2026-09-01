@@ -46,7 +46,8 @@ Usage:
   huginn serve [--bind 127.0.0.1:7419] [--token TOKEN] [--tailcat] [--tailcat-allow nodekey:…]
                [--zmqcat] [--zmqcat-listen ADDR] [--zmqcat-service NAME]
                [--zmqcat-workers N]
-  huginn list [--addr 127.0.0.1:7419] [--token TOKEN]
+  huginn list [--addr 127.0.0.1:7419] [--token TOKEN] [--liveness live|resumable]
+              [--runtime grok|codex|claude] [--cwd PREFIX] [--limit N] [--cursor C]
   huginn rpc --token TOKEN [--addr 127.0.0.1:7419] METHOD [JSON_PARAMS]
 
 Environment:
@@ -195,11 +196,30 @@ func runList(args []string) int {
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
 	addr := fs.String("addr", defaultBind, "sidecar address")
 	token := fs.String("token", os.Getenv("HUGINN_TOKEN"), "auth token (or HUGINN_TOKEN)")
+	liveness := fs.String("liveness", "", "only live or resumable sessions")
+	runtime := fs.String("runtime", "", "only grok, codex, or claude")
+	cwd := fs.String("cwd", "", "only sessions whose cwd has this prefix")
+	limit := fs.Int("limit", 0, "page size (default 200, max 1000)")
+	cursor := fs.String("cursor", "", "continue from a previous nextCursor")
 	fs.SetOutput(os.Stderr)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	return rpcCall(*addr, *token, broker.MethodList, json.RawMessage(`{}`))
+	params := map[string]any{}
+	for k, v := range map[string]string{"liveness": *liveness, "runtime": *runtime, "cwd": *cwd, "cursor": *cursor} {
+		if v != "" {
+			params[k] = v
+		}
+	}
+	if *limit > 0 {
+		params["limit"] = *limit
+	}
+	body, err := json.Marshal(params)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "huginn: %v\n", err)
+		return 2
+	}
+	return rpcCall(*addr, *token, broker.MethodList, json.RawMessage(body))
 }
 
 func runRPC(args []string) int {
