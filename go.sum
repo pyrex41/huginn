@@ -140,8 +140,8 @@ github.com/pires/go-proxyproto v0.8.1 h1:9KEixbdJfhrbtjpz/ZwCdWDD2Xem0NZ38qMYaAS
 github.com/pires/go-proxyproto v0.8.1/go.mod h1:ZKAAyp3cgy5Y5Mo4n9AlScrkCZwUy0g3Jf+slqQVcuU=
 github.com/pkg/sftp v1.13.6 h1:JFZT4XbOU7l77xGSpOdW+pwIMqP044IyjXX6FGyEKFo=
 github.com/pkg/sftp v1.13.6/go.mod h1:tz1ryNURKu77RL+GuCzmoJYxQczL3wLNNpPWagdg4Qk=
-github.com/pyrex41/zmqcat v0.0.0-20260901025729-eae2016e1a5e h1:INdwjF6aclvmdzMSqBt/1B0p+Nu8POWZUIjsxyhYFJ0=
-github.com/pyrex41/zmqcat v0.0.0-20260901025729-eae2016e1a5e/go.mod h1:iHSL1pZPeggQy1Vjqp+BT0w1g1Z0k6w6F7NqLbWyQ/c=
+github.com/pyrex41/zmqcat v0.0.0-20260901125150-185c15304c56 h1:JbX5PgpV5Xd65xoPbGXytz/vy3cT78M5QXeIsS/zv08=
+github.com/pyrex41/zmqcat v0.0.0-20260901125150-185c15304c56/go.mod h1:iHSL1pZPeggQy1Vjqp+BT0w1g1Z0k6w6F7NqLbWyQ/c=
 github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0tI/otEQ=
 github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7so1lCWt35ZSgc=
 github.com/safchain/ethtool v0.3.0 h1:gimQJpsI6sc1yIqP/y8GYgiXn/NjgvpM0RNoWLVVmP0=
