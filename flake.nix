@@ -3,7 +3,7 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    zmqcat.url = "git+ssh://git@github.com/pyrex41/zmqcat";
+    zmqcat.url = "github:pyrex41/zmqcat";
     zmqcat.inputs.nixpkgs.follows = "nixpkgs";
   };
 

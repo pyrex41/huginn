@@ -29,17 +29,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1788301985,
-        "narHash": "sha256-4q2zb1z93MwOtNNRhBImVbTowQMpJbm6C/ty30D5/N8=",
-        "ref": "refs/heads/main",
-        "rev": "f47706107e1cfc531e0827333795506471efd927",
-        "revCount": 3,
-        "type": "git",
-        "url": "ssh://git@github.com/pyrex41/zmqcat"
+        "lastModified": 1788306472,
+        "narHash": "sha256-sY86pB2zGgHl93y6EcRAoo7QqSmI+7/WUX6KpOZphtc=",
+        "owner": "pyrex41",
+        "repo": "zmqcat",
+        "rev": "527f2ac842ebf285eccf283e9585c7e43b4717eb",
+        "type": "github"
       },
       "original": {
-        "type": "git",
-        "url": "ssh://git@github.com/pyrex41/zmqcat"
+        "owner": "pyrex41",
+        "repo": "zmqcat",
+        "type": "github"
       }
     }
   },

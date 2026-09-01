@@ -6,7 +6,7 @@ Two repos, one flake input. Add `huginn` and you get both halves: it pulls
 ```nix
 # flake.nix
 {
-  inputs.huginn.url = "git+ssh://git@github.com/pyrex41/huginn";
+  inputs.huginn.url = "github:pyrex41/huginn";
 }
 ```
 
