@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -43,6 +44,8 @@ func usage() {
 
 Usage:
   huginn serve [--bind 127.0.0.1:7419] [--token TOKEN] [--tailcat] [--tailcat-allow nodekey:…]
+               [--zmqcat] [--zmqcat-listen ADDR] [--zmqcat-service NAME]
+               [--zmqcat-workers N]
   huginn list [--addr 127.0.0.1:7419] [--token TOKEN]
   huginn rpc --token TOKEN [--addr 127.0.0.1:7419] METHOD [JSON_PARAMS]
 
@@ -63,10 +66,14 @@ Project .mcp.json names the server huginn. Team/Enterprise need channelsEnabled.
 }
 
 type serveOpts struct {
-	Bind    string
-	Token   string
-	Tailcat bool
-	Allow   []string
+	Bind       string
+	Token      string
+	Tailcat    bool
+	Allow      []string
+	ZMQCat     bool
+	ZMQListen  string
+	ZMQService string
+	ZMQWorkers int
 }
 
 type stringList []string
@@ -83,15 +90,30 @@ func parseServe(args []string) (serveOpts, error) {
 	bind := fs.String("bind", defaultBind, "loopback listen address")
 	token := fs.String("token", os.Getenv("HUGINN_TOKEN"), "auth token (or HUGINN_TOKEN)")
 	tailcat := fs.Bool("tailcat", false, "optional Tailcat overlay (ephemeral key; prints tc… token to stderr)")
+	zmqEnabled := fs.Bool("zmqcat", false, "serve JSON-RPC requests as a zmqcat READY worker")
+	zmqListen := fs.String("zmqcat-listen", "", "zmqcat local sidecar address")
+	zmqService := fs.String("zmqcat-service", "huginn", "zmqcat service mailbox")
+	zmqWorkers := fs.Int("zmqcat-workers", defaultZMQWorkers, "concurrent zmqcat READY workers")
 	var allow stringList
 	fs.Var(&allow, "tailcat-allow", "repeatable nodekey:… allowlist (maps to tailcat serve --allow)")
 	fs.SetOutput(os.Stderr)
 	if err := fs.Parse(args); err != nil {
 		return serveOpts{}, err
 	}
-	opts := serveOpts{Bind: *bind, Token: *token, Tailcat: *tailcat, Allow: append([]string(nil), allow...)}
+	opts := serveOpts{
+		Bind: *bind, Token: *token, Tailcat: *tailcat,
+		Allow: append([]string(nil), allow...), ZMQCat: *zmqEnabled,
+		ZMQListen: *zmqListen, ZMQService: strings.TrimSpace(*zmqService),
+		ZMQWorkers: *zmqWorkers,
+	}
 	if len(opts.Allow) > 0 && !opts.Tailcat {
 		return serveOpts{}, fmt.Errorf("--tailcat-allow requires --tailcat")
+	}
+	if opts.ZMQCat && opts.ZMQService == "" {
+		return serveOpts{}, errNoZMQService
+	}
+	if opts.ZMQCat && opts.ZMQWorkers < 1 {
+		return serveOpts{}, fmt.Errorf("--zmqcat-workers must be at least 1")
 	}
 	return opts, nil
 }
@@ -117,6 +139,19 @@ func runServe(args []string) int {
 	defer ln.Close()
 	actual := ln.Addr().String()
 	fmt.Fprintf(os.Stderr, "huginn: listening on %s token_present=%v\n", actual, strings.TrimSpace(opts.Token) != "")
+
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	if opts.ZMQCat {
+		logf := func(format string, args ...any) { fmt.Fprintf(os.Stderr, format, args...) }
+		worker, err := startZMQWorker(ctx, opts.ZMQListen, opts.ZMQService, srv.Handler(), opts.Token, opts.ZMQWorkers, logf)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "huginn: zmqcat: %v\n", err)
+			return 1
+		}
+		defer worker.Close()
+		fmt.Fprintf(os.Stderr, "huginn: zmqcat READY service=%s listen=%s workers=%d\n", opts.ZMQService, displayZMQListen(opts.ZMQListen), opts.ZMQWorkers)
+	}
 
 	if opts.Tailcat {
 		ov, err := attachOverlay(os.Stderr, overlay.Config{LocalAddr: actual, Allow: opts.Allow})

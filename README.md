@@ -200,6 +200,60 @@ grokbot cannot:
   attach, default deny-until-configured)
 - drive a session whose runtime is not installed on that host
 
+## Try the zmqcat mailbox transport
+
+`zmqcat` can own the durable mailbox and Tailcat transport while Huginn runs
+as a named READY worker. The existing HTTP API remains available; all methods
+except the streaming `session/watch` can also be sent as JSON-RPC request
+bodies over ZMQC.
+
+In one terminal, start a local durable bus:
+
+```sh
+cd ../zmqcat
+go build -o bin/zmqcat ./cmd/zmqcat
+bin/zmqcat serve --local --mailbox ./mailbox.json
+```
+
+In another terminal, attach Huginn to the default local zmqcat socket:
+
+```sh
+cd ../huginn
+make build
+HUGINN_TOKEN=dev-secret bin/huginn serve --zmqcat --zmqcat-service huginn.local
+```
+
+`--zmqcat-workers` (default 4) sets how many requests are served concurrently;
+each worker holds its own zmqcat session, because a blocking READY occupies
+one and a single worker would queue every caller behind one slow
+`session/prompt`.
+
+Then issue a session request through the mailbox:
+
+```sh
+../zmqcat/bin/zmqcat req huginn.local \
+  '{"jsonrpc":"2.0","id":1,"method":"session/list","params":{}}'
+```
+
+For a remote trial, remove `--local` from `zmqcat serve`, run `zmqcat join`
+with the printed Tailcat token on the Huginn host, and point Huginn at that
+join process's local socket. Huginn itself does not need a Tailcat flag in
+this topology.
+
+### What `--zmqcat` does to the trust boundary
+
+Over HTTP, every caller proves it holds `HUGINN_TOKEN`. Over zmqcat there is
+no such proof: the worker attaches the token to the request it hands its own
+broker, so **anything that can put a job on the service mailbox gets fully
+authenticated Huginn RPC**. zmqcat has no mailbox-level ACLs, and its default
+sidecar is a unix socket at `/tmp/zmqcat-<uid>.sock` created with the ordinary
+umask.
+
+Enabling `--zmqcat` therefore delegates authentication to whoever controls
+that socket and, for the remote topology, to the Tailcat overlay's `--allow`
+list. Do not enable it on a host where untrusted local users can reach the
+sidecar. The HTTP surface keeps its own token check either way.
+
 ## Relationship to other repos
 
 | Repo | Owns | Huginn does with it |

@@ -3,6 +3,7 @@ module github.com/pyrex41/huginn
 go 1.26.5
 
 require (
+	github.com/pyrex41/zmqcat v0.0.0-20260901125150-185c15304c56
 	github.com/tailscale/tailcat v0.3.0
 	tailscale.com v1.101.0-pre.0.20260720143344-246c82a658b3
 )
