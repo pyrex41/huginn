@@ -1,0 +1,67 @@
+# GoReleaser configuration for tailcat releases.
+# See RELEASING.md for how to cut a release.
+version: 2
+
+builds:
+  - id: tailcat
+    main: ./cmd/tailcat
+    binary: tailcat
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X main.version=v{{ .Version }}
+    goos:
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ignore:
+      - goos: windows
+        goarch: arm
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      tailcat_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}
+    files:
+      - LICENSE
+      - README.md
+
+nfpms:
+  - package_name: tailcat
+    homepage: https://github.com/tailscale/tailcat
+    maintainer: Tailscale Inc. <info@tailscale.com>
+    description: Netcat-like tool over Tailscale's data plane, without Tailscale's control plane.
+    license: BSD-3-Clause
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+
+dockers_v2:
+  - ids: [tailcat]
+    dockerfile: Dockerfile.goreleaser
+    images:
+      - ghcr.io/tailscale/tailcat
+    tags:
+      - v{{ .Version }}
+      - latest
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    labels:
+      org.opencontainers.image.title: tailcat
+      org.opencontainers.image.source: https://github.com/tailscale/tailcat
+      org.opencontainers.image.version: v{{ .Version }}
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.licenses: BSD-3-Clause
+
+checksum:
+  name_template: checksums.txt
