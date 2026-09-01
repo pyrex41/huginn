@@ -15,6 +15,7 @@ import (
 
 	"github.com/pyrex41/huginn/internal/broker"
 	"github.com/pyrex41/huginn/internal/overlay"
+	"github.com/pyrex41/huginn/internal/presence"
 )
 
 const defaultBind = "127.0.0.1:7419"
@@ -99,7 +100,7 @@ func parseServe(args []string) (serveOpts, error) {
 	zmqService := fs.String("zmqcat-service", "huginn", "zmqcat service mailbox")
 	zmqWorkers := fs.Int("zmqcat-workers", defaultZMQWorkers, "concurrent zmqcat READY workers")
 	noPresence := fs.Bool("zmqcat-no-presence", false, "do not announce this sidecar on the bus")
-	presenceEvery := fs.Duration("zmqcat-presence-every", DefaultPresenceInterval, "presence announcement interval")
+	presenceEvery := fs.Duration("zmqcat-presence-every", presence.DefaultInterval, "presence announcement interval")
 	var allow stringList
 	fs.Var(&allow, "tailcat-allow", "repeatable nodekey:… allowlist (maps to tailcat serve --allow)")
 	fs.SetOutput(os.Stderr)
@@ -159,13 +160,13 @@ func runServe(args []string) int {
 		fmt.Fprintf(os.Stderr, "huginn: zmqcat READY service=%s listen=%s workers=%d\n", opts.ZMQService, displayZMQListen(opts.ZMQListen), opts.ZMQWorkers)
 
 		if !opts.NoPresence {
-			pres, err := startPresence(ctx, opts.ZMQListen, opts.ZMQService, actual, srv.Runtimes(), opts.PresenceEvery, logf)
+			pres, err := presence.Start(ctx, opts.ZMQListen, opts.ZMQService, actual, srv.Runtimes(), opts.PresenceEvery, logf)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "huginn: zmqcat presence: %v\n", err)
 				return 1
 			}
 			defer pres.Close()
-			fmt.Fprintf(os.Stderr, "huginn: announcing on %s%s\n", PresenceTopic, opts.ZMQService)
+			fmt.Fprintf(os.Stderr, "huginn: announcing on %s%s\n", presence.Topic, opts.ZMQService)
 		}
 	}
 

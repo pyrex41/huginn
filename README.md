@@ -272,6 +272,47 @@ timestamp. It carries no session counts: presence runs on a timer, and
 counting sessions means walking thousands of files. Ask `session/list` with
 `{"liveness":"live"}` for that.
 
+## Harnesses as clients: `huginn-mcp`
+
+The sidecar makes a machine's sessions *reachable*. `huginn-mcp` makes them
+*askable*: one stateless MCP endpoint that every harness on every machine
+registers, so an agent can ask what is running elsewhere.
+
+It is not the Claude channel plugin. `cmd/huginn-channel` injects into one
+live Claude TUI on this host; `cmd/huginn-mcp` answers questions about
+sessions anywhere on the bus. Separate binaries, separate jobs.
+
+Run it beside `zmqcat serve` on the orchestration box:
+
+```sh
+HUGINN_MCP_TOKEN=… huginn-mcp --bind 127.0.0.1:7420
+```
+
+Two tools, both read-only:
+
+- `machines_list` — who is on the bus, from presence
+- `sessions_list` — `session/list` against one machine, or **every** machine
+  at once when `machine` is omitted
+
+Fan-out is per-machine tolerant: one unreachable host comes back as a row
+with an `error`, not a failed call, so a single dead laptop cannot blind the
+caller to everything else.
+
+Stateless is what makes one endpoint serve every harness. A tool call carries
+no session affinity, which is the same shape as a zmqcat request/reply, so
+the server is a pure translator — nothing kept between calls, restartable
+mid-conversation.
+
+### Why prompt, interrupt, and permission are not there
+
+Anything that can reach this endpoint could otherwise drive every session on
+every machine, and `session/permission` approves `Bash` and `Write` in
+someone else's live session. Those verbs stay off until per-principal
+authorization exists — garmr's job, and this endpoint is the natural place
+for it, being the one point every agent call passes through.
+
+`--token` is required. It is a network listener.
+
 ### What `--zmqcat` does to the trust boundary
 
 Over HTTP, every caller proves it holds `HUGINN_TOKEN`. Over zmqcat there is

@@ -1,4 +1,4 @@
-package main
+package presence
 
 import (
 	"context"
@@ -40,7 +40,7 @@ func TestPresenceRosterReachesLateSubscriber(t *testing.T) {
 	defer cancel()
 	runtimes := []adapter.Runtime{adapter.RuntimeGrok, adapter.RuntimeClaude}
 	for _, svc := range []string{"h.studio", "h.laptop"} {
-		p, err := startPresence(ctx, sock, svc, "127.0.0.1:0", runtimes, time.Hour, nil)
+		p, err := Start(ctx, sock, svc, "127.0.0.1:0", runtimes, time.Hour, nil)
 		if err != nil {
 			t.Fatalf("presence %s: %v", svc, err)
 		}
@@ -54,11 +54,11 @@ func TestPresenceRosterReachesLateSubscriber(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sub.Close()
-	if err := sub.Sub(PresenceTopic); err != nil {
+	if err := sub.Sub(Topic); err != nil {
 		t.Fatal(err)
 	}
 
-	seen := map[string]announcement{}
+	seen := map[string]Announcement{}
 	deadline := time.Now().Add(3 * time.Second)
 	for len(seen) < 2 && time.Now().Before(deadline) {
 		_ = sub.Conn.SetReadDeadline(time.Now().Add(time.Second))
@@ -66,7 +66,7 @@ func TestPresenceRosterReachesLateSubscriber(t *testing.T) {
 		if err != nil {
 			break
 		}
-		var a announcement
+		var a Announcement
 		if err := json.Unmarshal(f.Payload(), &a); err != nil || a.Service == "" {
 			continue
 		}
@@ -96,13 +96,13 @@ func TestPresenceDoesNotEnumerateSessions(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	p, err := startPresence(ctx, sock, "h.x", "127.0.0.1:0", nil, time.Hour, nil)
+	p, err := Start(ctx, sock, "h.x", "127.0.0.1:0", nil, time.Hour, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer p.Close()
 
-	var a announcement
+	var a Announcement
 	if err := json.Unmarshal(p.body, &a); err != nil {
 		t.Fatal(err)
 	}

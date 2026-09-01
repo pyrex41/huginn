@@ -1,4 +1,7 @@
-package main
+// Package presence is the sidecar roster: each huginn announces itself on
+// the bus, and an orchestrator learns which machines exist without being
+// told.
+package presence
 
 import (
 	"context"
@@ -11,20 +14,21 @@ import (
 	"github.com/pyrex41/zmqcat"
 )
 
-// PresenceTopic prefixes every sidecar's presence announcement. A consumer
+// Topic prefixes every sidecar's presence announcement. A consumer
 // subscribes to the prefix and zmqcat's last-value cache replays the most
 // recent announcement per machine immediately, so a roster is available
 // without waiting a full interval for the next tick.
-const PresenceTopic = "huginn.presence."
+const Topic = "huginn.presence."
 
-// DefaultPresenceInterval is how often a sidecar re-announces itself.
-const DefaultPresenceInterval = 15 * time.Second
+// DefaultInterval is how often a sidecar re-announces itself.
+const DefaultInterval = 15 * time.Second
 
 // announcement is deliberately cheap: identity and reachability, nothing
 // that requires walking the session store. Session counts belong to
 // session/list, which filters and pages; recomputing them on every tick
 // would read thousands of files off disk for a roster entry.
-type announcement struct {
+// Announcement is one sidecar's roster entry.
+type Announcement struct {
 	Service   string   `json:"service"`
 	Host      string   `json:"host"`
 	Runtimes  []string `json:"runtimes"`
@@ -32,18 +36,19 @@ type announcement struct {
 	UpdatedAt string   `json:"updatedAt"`
 }
 
-type presence struct {
+// Publisher announces one sidecar until its context is done.
+type Publisher struct {
 	client *zmqcat.Client
 	topic  string
 	body   []byte
 }
 
-// startPresence announces this sidecar on the bus until ctx is done. It uses
-// its own zmqcat session: the worker sessions block in READY, and publishing
-// on one would race that read.
-func startPresence(ctx context.Context, listen, service, bind string, runtimes []adapter.Runtime, interval time.Duration, logf func(string, ...any)) (*presence, error) {
+// It uses its own zmqcat session: worker sessions block in READY, and
+// publishing on one would race that read.
+// Start announces this sidecar on the bus until ctx is done.
+func Start(ctx context.Context, listen, service, bind string, runtimes []adapter.Runtime, interval time.Duration, logf func(string, ...any)) (*Publisher, error) {
 	if interval <= 0 {
-		interval = DefaultPresenceInterval
+		interval = DefaultInterval
 	}
 	if logf == nil {
 		logf = func(string, ...any) {}
@@ -61,8 +66,8 @@ func startPresence(ctx context.Context, listen, service, bind string, runtimes [
 	for _, r := range runtimes {
 		names = append(names, string(r))
 	}
-	p := &presence{client: c, topic: PresenceTopic + service}
-	p.body, _ = json.Marshal(announcement{
+	p := &Publisher{client: c, topic: Topic + service}
+	p.body, _ = json.Marshal(Announcement{
 		Service: service, Host: host, Runtimes: names, Bind: bind,
 	})
 
@@ -85,8 +90,8 @@ func startPresence(ctx context.Context, listen, service, bind string, runtimes [
 	return p, nil
 }
 
-func (p *presence) announce() error {
-	var a announcement
+func (p *Publisher) announce() error {
+	var a Announcement
 	if err := json.Unmarshal(p.body, &a); err != nil {
 		return err
 	}
@@ -98,7 +103,7 @@ func (p *presence) announce() error {
 	return p.client.Pub(p.topic, "", body)
 }
 
-func (p *presence) Close() error {
+func (p *Publisher) Close() error {
 	if p == nil || p.client == nil {
 		return nil
 	}
