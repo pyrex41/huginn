@@ -10,6 +10,44 @@ to grokbot: list, watch, prompt, interrupt, permission verdict.
 
 That is the whole product.
 
+## Install
+
+```nix
+# flake.nix — one input gets you huginn and the zmqcat bus it rides on
+inputs.huginn.url = "github:pyrex41/huginn";
+```
+
+Then one option per role:
+
+```nix
+# each machine, as the user whose sessions these are (home-manager)
+imports = [ inputs.huginn.homeManagerModules.default ];
+services.huginn = { enable = true; service = "h.studio"; tokenFile = "…"; };
+
+# the box that owns the bus
+# NixOS: inputs.huginn.nixosModules.default
+# macOS: inputs.huginn.darwinModules.default
+imports = [ inputs.huginn.nixosModules.default ];
+services.zmqcat = { enable = true; role = "serve"; };
+services.huginn-mcp = { enable = true; tokenFile = "…"; };
+```
+
+**[INSTALL.md](INSTALL.md) is the walkthrough** — hub first, then machines,
+then point your harnesses at one URL. It also covers what enabling this does
+to your trust boundary, which is worth reading before you turn it on.
+
+Without Nix:
+
+```sh
+go install github.com/pyrex41/huginn/cmd/huginn@latest
+go install github.com/pyrex41/huginn/cmd/huginn-mcp@latest
+go install github.com/pyrex41/zmqcat/cmd/zmqcat@latest
+```
+
+or clone and `make build`, which produces all three binaries. Dependencies
+are vendored, so a build fetches nothing. The Nix modules pass ordinary flags; `huginn serve --help` and
+`huginn-mcp --help` show the same options under different names.
+
 ## Why this exists
 
 Claude Code, Codex, and Grok Build already speak machine protocols:
@@ -218,11 +256,6 @@ grokbot cannot:
   attach, default deny-until-configured)
 - drive a session whose runtime is not installed on that host
 
-## Install
-
-`INSTALL.md` is the short path: one flake input, a hub, then each machine.
-The rest of this section is what the modules run underneath.
-
 ## Try the zmqcat mailbox transport
 
 `zmqcat` can own the durable mailbox and Tailcat transport while Huginn runs
@@ -230,21 +263,24 @@ as a named READY worker. The existing HTTP API remains available; all methods
 except the streaming `session/watch` can also be sent as JSON-RPC request
 bodies over ZMQC.
 
-In one terminal, start a local durable bus:
+This is the by-hand version of what the Nix modules run; use it to poke at
+the bus, not to deploy. In one terminal, start a local durable bus:
 
 ```sh
-cd ../zmqcat
-go build -o bin/zmqcat ./cmd/zmqcat
-bin/zmqcat serve --local --mailbox ./mailbox.json
+zmqcat serve --local --listen unix:///tmp/zmqcat.sock --mailbox ./mailbox.json
 ```
 
-In another terminal, attach Huginn to the default local zmqcat socket:
+In another, attach Huginn to it:
 
 ```sh
-cd ../huginn
-make build
-HUGINN_TOKEN=dev-secret bin/huginn serve --zmqcat --zmqcat-service huginn.local
+HUGINN_TOKEN=dev-secret huginn serve --zmqcat \
+  --zmqcat-listen unix:///tmp/zmqcat.sock --zmqcat-service huginn.local
 ```
+
+Pass `--listen` / `--zmqcat-listen` explicitly on both sides. zmqcat's CLI
+defaults to `unix:///tmp/zmqcat-<uid>.sock` while the Nix modules default to
+`unix:///tmp/zmqcat.sock`; if the two disagree they miss each other with no
+error.
 
 `--zmqcat-workers` (default 4) sets how many requests are served concurrently;
 each worker holds its own zmqcat session, because a blocking READY occupies
@@ -254,8 +290,8 @@ one and a single worker would queue every caller behind one slow
 Then issue a session request through the mailbox:
 
 ```sh
-../zmqcat/bin/zmqcat req huginn.local \
-  '{"jsonrpc":"2.0","id":1,"method":"session/list","params":{}}'
+zmqcat req --listen unix:///tmp/zmqcat.sock huginn.local \
+  '{"jsonrpc":"2.0","id":1,"method":"session/list","params":{"liveness":"live"}}'
 ```
 
 For a remote trial, remove `--local` from `zmqcat serve`, run `zmqcat join`
@@ -420,15 +456,41 @@ Claude TUI via the channel, inject into a Codex thread whose TUI is
 `--remote` against the same app-server. If any of those requires keystrokes
 into a PTY, v1 has failed.
 
-## Layout (when there is code)
+### Where this actually is
+
+Done: the five verbs over loopback HTTP; the three adapters; `session/list`
+filtered and paged; zmqcat as an optional transport; presence; a read-only
+`huginn-mcp` across the bus; Nix packaging and service modules.
+
+Not done, in the order it matters:
+
+1. **Per-principal authorization.** `prompt`, `interrupt`, and `permission`
+   are deliberately absent from `huginn-mcp` until it exists — anything that
+   can reach that endpoint could otherwise drive every session on every
+   machine. garmr's job; this endpoint is the chokepoint to put it in front
+   of.
+2. **`session/watch` over the bus.** It is a stream and does not fit one
+   req/rep frame. A bounded snapshot with a cursor suits agents; pub/sub on
+   `huginn.events.…` suits grokbot. Different consumers, different
+   transports.
+3. **A `pi` adapter** — [#2](https://github.com/pyrex41/huginn/issues/2).
+4. **Cross-host Tailcat, actually exercised.** Everything so far has been
+   verified with two sidecars on one machine over a local socket.
+
+## Layout
 
 ```
-README.md          this document; the product is the pipe it describes
-cmd/huginn/        sidecar + debug CLI
-internal/broker/   the five verbs
-internal/overlay/  optional Tailcat transport (not a verb)
-internal/adapter/  grok, codex, claude — native protocols only
-internal/discover/ live vs resumable probes
+README.md            this document; the product is the pipe it describes
+INSTALL.md           hub, then machines, then harnesses
+cmd/huginn/          sidecar + debug CLI
+cmd/huginn-mcp/      read-only MCP endpoint across the bus
+cmd/huginn-channel/  Claude channel plugin (injects into one live TUI)
+internal/broker/     the five verbs
+internal/overlay/    optional Tailcat transport (not a verb)
+internal/adapter/    grok, codex, claude — native protocols only
+internal/discover/   live vs resumable probes
+internal/presence/   who is on the bus
+nix/                 packaging and the service modules
 ```
 
 No web UI package. No deploy chart. No shenmux import.
