@@ -43,6 +43,7 @@ type response struct {
 type rpcError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+	Data    any    `json:"data,omitempty"`
 }
 
 func errorResponse(id json.RawMessage, code int, msg string) response {

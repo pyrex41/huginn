@@ -15,6 +15,7 @@ import (
 
 	"github.com/pyrex41/huginn/internal/adapter"
 	"github.com/pyrex41/huginn/internal/adapter/claude"
+	"github.com/pyrex41/huginn/internal/adapter/tmux"
 	"github.com/pyrex41/huginn/internal/discover"
 )
 
@@ -38,15 +39,19 @@ type Config struct {
 	Bind  string
 	Token string
 	Host  *discover.Host
+	// Shells registers the shell verb family. Nil leaves shell/* unbound
+	// (method not found); huginn serve --shell sets it.
+	Shells *tmux.Adapter
 }
 
 // Server is the grokbot JSON-RPC surface (five verbs). Permission relay
 // default-denies until an attach opts in (skeleton: never opted in).
 type Server struct {
-	bind  string
-	token string
-	host  *discover.Host
-	http  *http.Server
+	bind   string
+	token  string
+	host   *discover.Host
+	shells *tmux.Adapter
+	http   *http.Server
 }
 
 func New(cfg Config) (*Server, error) {
@@ -64,7 +69,7 @@ func New(cfg Config) (*Server, error) {
 	if host == nil {
 		host = discover.NewWithToken(cfg.Token)
 	}
-	s := &Server{bind: bind, token: cfg.Token, host: host}
+	s := &Server{bind: bind, token: cfg.Token, host: host, shells: cfg.Shells}
 	s.http = &http.Server{
 		Addr:    bind,
 		Handler: s.Handler(),
@@ -195,6 +200,9 @@ func (s *Server) dispatch(ctx context.Context, req request) response {
 	case MethodPermission:
 		return s.permission(ctx, req)
 	default:
+		if isShellMethod(req.Method) {
+			return s.dispatchShell(ctx, req)
+		}
 		return errorResponse(req.ID, CodeMethodNotFound, "method not found")
 	}
 }
@@ -472,7 +480,16 @@ func (s *Server) pluginReply(w http.ResponseWriter, r *http.Request) {
 }
 
 func logRPC(method string, params json.RawMessage) {
-	// Session ids only. Never prompt bodies, tool outputs, or file contents.
+	// Session ids and shell names only. Never prompt bodies, typed text,
+	// screen contents, tool outputs, or file contents.
+	if isShellMethod(method) {
+		if name := shellNameOf(params); name != "" {
+			slog.Info("rpc", "method", method, "shell", name)
+			return
+		}
+		slog.Info("rpc", "method", method)
+		return
+	}
 	sid := sessionIDOf(params)
 	if sid != "" {
 		slog.Info("rpc", "method", method, "sessionId", sid)
@@ -492,6 +509,19 @@ func sessionIDOf(params json.RawMessage) string {
 		return ""
 	}
 	return p.SessionID
+}
+
+func shellNameOf(params json.RawMessage) string {
+	if len(params) == 0 {
+		return ""
+	}
+	var p struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return ""
+	}
+	return p.Name
 }
 
 func decodeParams(raw json.RawMessage, dest any) error {
