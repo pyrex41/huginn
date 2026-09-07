@@ -84,7 +84,7 @@ func TestParseWindowsAndPanes(t *testing.T) {
 	if len(ws["build"]) != 2 || !ws["build"][1].Active || ws["build"][1].Name != "make: all" {
 		t.Fatalf("windows=%+v", ws)
 	}
-	ps, err := ParsePanes([]byte("build:1:0:%3:1:make:/home/u/proj\n"))
+	ps, err := ParsePanes([]byte("build:1:0:%3:1:0:make:/home/u/proj\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestListAssemblesRows(t *testing.T) {
 	f := &fakeRunner{replies: map[string][]byte{
 		"list-sessions": []byte("b:1:0:1700000000:/b\na:1:1:1700000000:/a\n"),
 		"list-windows":  []byte("a:0:1:zsh\nb:0:1:zsh\n"),
-		"list-panes":    []byte("a:0:0:%0:1:zsh:/a\nb:0:0:%1:1:zsh:/b\n"),
+		"list-panes":    []byte("a:0:0:%0:1:0:zsh:/a\nb:0:0:%1:1:1:zsh:/b\n"),
 	}}
 	a := NewWithRunner(f)
 	got, err := a.List(context.Background())
@@ -122,7 +122,7 @@ func TestListAssemblesRows(t *testing.T) {
 	if len(got) != 2 || got[0].Name != "a" || got[1].Name != "b" {
 		t.Fatalf("rows must be sorted by name: %+v", got)
 	}
-	if got[1].Panes[0].ID != "%1" || got[0].Windows[0].Name != "zsh" {
+	if got[1].Panes[0].ID != "%1" || got[0].Windows[0].Name != "zsh" || !got[1].Panes[0].Tapped || got[0].Panes[0].Tapped {
 		t.Fatalf("rows=%+v", got)
 	}
 	for _, c := range f.calls {
@@ -211,7 +211,7 @@ func TestScreenTrimsPaddedTail(t *testing.T) {
 func TestPaneIDMustBelongToShell(t *testing.T) {
 	f := &fakeRunner{replies: map[string][]byte{
 		"list-sessions": []byte("build:1:0:1700000000:/b\n"),
-		"list-panes":    []byte("build:0:0:%7:1:zsh:/b\n"),
+		"list-panes":    []byte("build:0:0:%7:1:0:zsh:/b\n"),
 	}, screens: []string{"x"}}
 	a := NewWithRunner(f)
 	if _, err := a.Screen(context.Background(), "build", "%9", 0); !errors.Is(err, ErrBadPane) {

@@ -2,12 +2,24 @@ package tmux
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pyrex41/huginn/internal/termlog"
 )
+
+// TestMain lets the test binary stand in for huginn as the pipe-pane
+// writer: the adapter runs os.Executable() shell-writer, which is us.
+func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == WriterSubcommand {
+		os.Exit(termlog.RunWriter(os.Args[2:], os.Stdin, os.Stderr))
+	}
+	os.Exit(m.Run())
+}
 
 // TestLiveTmux drives a private tmux server: it needs tmux on PATH and
 // touches nothing of the user's.
@@ -26,14 +38,14 @@ func TestLiveTmux(t *testing.T) {
 		t.Fatalf("no server: rows=%v err=%v", empty, err)
 	}
 
-	row, err := a.NewShell(ctx, "hg-test", t.TempDir(), "")
+	row, err := a.NewShell(ctx, "hg-test", t.TempDir(), "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if row.Name != "hg-test" || len(row.Panes) != 1 || len(row.Windows) != 1 || row.Attached {
 		t.Fatalf("row=%+v", row)
 	}
-	if _, err := a.NewShell(ctx, "hg-test", "", ""); err != ErrExists {
+	if _, err := a.NewShell(ctx, "hg-test", "", "", false); err != ErrExists {
 		t.Fatalf("duplicate: %v", err)
 	}
 
@@ -79,6 +91,9 @@ func TestLiveTmux(t *testing.T) {
 	// pane, print more than that, and the log has them all while tmux's
 	// own history admits it dropped some.
 	a.SetLogDir(t.TempDir())
+	// A 16 KB cap rotates at 4 KB segments; sixty lines is under it, so
+	// nothing is dropped and offsets stay whole across the rotation.
+	a.SetLogMax(16 << 10)
 	if _, err := (ExecRunner{Socket: sock}).Run(ctx, "set-option", "-g", "history-limit", "5"); err != nil {
 		t.Fatal(err)
 	}
@@ -118,6 +133,36 @@ func TestLiveTmux(t *testing.T) {
 	}
 	if h.Source != "tap" || !strings.Contains(lineTexts(h), "line-1|line-2|") || !strings.Contains(lineTexts(h), "line-60|END") {
 		t.Fatalf("tapped history lost lines: source=%s %s", h.Source, lineTexts(h))
+	}
+	sh, _ = a.Get(ctx, "hg-test")
+	if !sh.Panes[1].Tapped || sh.Panes[0].Tapped {
+		t.Fatalf("tapped flag: %+v", sh.Panes)
+	}
+	// Now blow through the cap and confirm the tail is intact while the
+	// head is gone and reported so.
+	if _, err := a.Send(ctx, "hg-test", pane, "for i in $(seq 1 400); do echo padding-padding-padding-padding-padding-padding-$i; done; echo END2", true, ""); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(10 * time.Second)
+	for {
+		h, err = a.ReadHistory(ctx, "hg-test", pane, -1, 0, 5)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(lineTexts(h), "|END2") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("never saw END2: %s", lineTexts(h))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !h.TruncatedBefore || h.DroppedBefore == 0 || h.Size < 20000 {
+		t.Fatalf("expected rotation drops: %+v", h)
+	}
+	early, _ := a.ReadHistory(ctx, "hg-test", pane, 0, 0, 1)
+	if early.From < h.DroppedBefore {
+		t.Fatalf("read below floor: %+v", early)
 	}
 	// The untapped view of the same pane is tmux's, and it is short.
 	if err := a.StopTap(ctx, "hg-test", pane, true); err != nil {

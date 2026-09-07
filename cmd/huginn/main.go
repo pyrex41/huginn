@@ -17,6 +17,7 @@ import (
 	"github.com/pyrex41/huginn/internal/broker"
 	"github.com/pyrex41/huginn/internal/overlay"
 	"github.com/pyrex41/huginn/internal/presence"
+	"github.com/pyrex41/huginn/internal/termlog"
 )
 
 const defaultBind = "127.0.0.1:7419"
@@ -35,6 +36,9 @@ func main() {
 		os.Exit(runRPC(os.Args[2:]))
 	case "shell":
 		os.Exit(runShell(os.Args[2:]))
+	case tmux.WriterSubcommand:
+		// Run by tmux pipe-pane for each tapped pane, not by people.
+		os.Exit(termlog.RunWriter(os.Args[2:], os.Stdin, os.Stderr))
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -51,7 +55,7 @@ Usage:
   huginn serve [--bind 127.0.0.1:7419] [--token TOKEN] [--tailcat] [--tailcat-allow nodekey:…]
                [--zmqcat] [--zmqcat-listen ADDR] [--zmqcat-service NAME]
                [--zmqcat-workers N] [--zmqcat-no-presence]
-               [--shell] [--tmux-socket PATH] [--shell-log-dir DIR]
+               [--shell] [--tmux-socket PATH] [--shell-log-dir DIR] [--shell-log-max BYTES]
   huginn list [--addr 127.0.0.1:7419] [--token TOKEN] [--liveness live|resumable]
               [--runtime grok|codex|claude] [--cwd PREFIX] [--limit N] [--cursor C]
   huginn rpc --token TOKEN [--addr 127.0.0.1:7419] METHOD [JSON_PARAMS]
@@ -91,6 +95,7 @@ type serveOpts struct {
 	Shell         bool
 	TmuxSocket    string
 	ShellLogDir   string
+	ShellLogMax   int64
 }
 
 type stringList []string
@@ -116,6 +121,7 @@ func parseServe(args []string) (serveOpts, error) {
 	shell := fs.Bool("shell", false, "register the tmux-backed shell verbs (shell/send is remote command execution)")
 	tmuxSocket := fs.String("tmux-socket", "", "tmux server socket (default: tmux's default for this user)")
 	shellLogDir := fs.String("shell-log-dir", "", "where shell/tap writes pane logs (default $XDG_STATE_HOME/huginn/shells)")
+	shellLogMax := fs.Int64("shell-log-max", termlog.DefaultMaxBytes, "per-pane log cap in bytes; oldest segments are dropped past it")
 	var allow stringList
 	fs.Var(&allow, "tailcat-allow", "repeatable nodekey:… allowlist (maps to tailcat serve --allow)")
 	fs.SetOutput(os.Stderr)
@@ -127,7 +133,10 @@ func parseServe(args []string) (serveOpts, error) {
 		Allow: append([]string(nil), allow...), ZMQCat: *zmqEnabled,
 		ZMQListen: *zmqListen, ZMQService: strings.TrimSpace(*zmqService),
 		ZMQWorkers: *zmqWorkers, NoPresence: *noPresence, PresenceEvery: *presenceEvery,
-		Shell: *shell, TmuxSocket: *tmuxSocket, ShellLogDir: *shellLogDir,
+		Shell: *shell, TmuxSocket: *tmuxSocket, ShellLogDir: *shellLogDir, ShellLogMax: *shellLogMax,
+	}
+	if opts.Shell && opts.ShellLogMax < 1<<16 {
+		return serveOpts{}, fmt.Errorf("--shell-log-max must be at least 65536")
 	}
 	if opts.TmuxSocket != "" && !opts.Shell {
 		return serveOpts{}, fmt.Errorf("--tmux-socket requires --shell")
@@ -161,7 +170,7 @@ func runServe(args []string) int {
 			fmt.Fprintf(os.Stderr, "huginn: --shell: %v\n", err)
 			return 1
 		}
-		cfg.Shells = tmux.NewWithOptions(tmux.Options{Socket: opts.TmuxSocket, LogDir: opts.ShellLogDir})
+		cfg.Shells = tmux.NewWithOptions(tmux.Options{Socket: opts.TmuxSocket, LogDir: opts.ShellLogDir, LogMaxBytes: opts.ShellLogMax})
 	}
 	srv, err := broker.New(cfg)
 	if err != nil {

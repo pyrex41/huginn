@@ -90,6 +90,8 @@ type shellNewParams struct {
 	Name    string `json:"name"`
 	CWD     string `json:"cwd,omitempty"`
 	Command string `json:"command,omitempty"`
+	// Tap records the new shell from its first byte.
+	Tap bool `json:"tap,omitempty"`
 }
 
 type shellTapParams struct {
@@ -250,7 +252,7 @@ func (s *Server) shellNew(ctx context.Context, req request) response {
 	if !s.hostMatches(p.Host) {
 		return errorResponse(req.ID, CodeInvalidParams, "host is not this machine")
 	}
-	row, err := s.shells.NewShell(ctx, p.Name, p.CWD, p.Command)
+	row, err := s.shells.NewShell(ctx, p.Name, p.CWD, p.Command, p.Tap)
 	if err != nil {
 		return shellErr(req.ID, err, nil)
 	}

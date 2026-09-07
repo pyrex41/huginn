@@ -108,6 +108,8 @@ type Shell struct {
 	CWD      string   `json:"cwd"`
 	Attached bool     `json:"attached"`
 	Created  string   `json:"created"`
+	// Tap is set on a shell/new row when the caller asked for one.
+	Tap *Tap `json:"tap,omitempty"`
 }
 
 // Window is one tmux window in a shell.
@@ -125,6 +127,8 @@ type Pane struct {
 	Active  bool   `json:"active"`
 	CWD     string `json:"cwd"`
 	Command string `json:"command"`
+	// Tapped is tmux's pane_pipe flag: output is being recorded.
+	Tapped bool `json:"tapped"`
 }
 
 // Screen is shell/screen: a capture of one pane plus a digest of it.
@@ -156,6 +160,10 @@ type Adapter struct {
 	host   string
 	now    func() time.Time
 	logs   *termlog.Store
+	// writer is the command tmux pipe-pane runs per tapped pane; it is
+	// this binary's shell-writer subcommand. logMax caps a pane's log.
+	writer string
+	logMax int64
 }
 
 // New wraps tmux on the given socket. Empty socket is tmux's default for
@@ -187,8 +195,8 @@ const (
 	sessionFields = 5
 	windowFormat  = "#{session_name}:#{window_index}:#{window_active}:#{window_name}"
 	windowFields  = 4
-	paneFormat    = "#{session_name}:#{window_index}:#{pane_index}:#{pane_id}:#{pane_active}:#{pane_current_command}:#{pane_current_path}"
-	paneFields    = 7
+	paneFormat    = "#{session_name}:#{window_index}:#{pane_index}:#{pane_id}:#{pane_active}:#{pane_pipe}:#{pane_current_command}:#{pane_current_path}"
+	paneFields    = 8
 )
 
 // List enumerates the tmux server's sessions. No server is an empty list.
@@ -352,8 +360,9 @@ func (a *Adapter) input(ctx context.Context, name, pane, expectGen string, do fu
 }
 
 // NewShell creates a detached tmux session. command, when set, replaces the
-// user's shell as the pane's program.
-func (a *Adapter) NewShell(ctx context.Context, name, cwd, command string) (Shell, error) {
+// user's shell as the pane's program. tap records the pane from its first
+// byte, so a shell grokbot opened has a complete history.
+func (a *Adapter) NewShell(ctx context.Context, name, cwd, command string, tap bool) (Shell, error) {
 	if err := ValidateName(name); err != nil {
 		return Shell{}, err
 	}
@@ -367,7 +376,20 @@ func (a *Adapter) NewShell(ctx context.Context, name, cwd, command string) (Shel
 	if _, err := a.runner.Run(ctx, args...); err != nil {
 		return Shell{}, mapErr(err)
 	}
-	return a.Get(ctx, name)
+	var t *Tap
+	if tap {
+		got, err := a.StartTap(ctx, name, "")
+		if err != nil {
+			return Shell{}, err
+		}
+		t = &got
+	}
+	row, err := a.Get(ctx, name)
+	if err != nil {
+		return Shell{}, err
+	}
+	row.Tap = t
+	return row, nil
 }
 
 // Kill destroys a tmux session and everything running in it.
@@ -517,7 +539,7 @@ func ParsePanes(out []byte) (map[string][]Pane, error) {
 			return nil, fmt.Errorf("tmux: list-panes: index %q: %w", f[2], err)
 		}
 		res[f[0]] = append(res[f[0]], Pane{
-			ID: f[3], Window: win, Index: idx, Active: f[4] == "1", Command: f[5], CWD: f[6],
+			ID: f[3], Window: win, Index: idx, Active: f[4] == "1", Tapped: f[5] == "1", Command: f[6], CWD: f[7],
 		})
 	}
 	return res, nil
@@ -578,24 +600,40 @@ func mapErr(err error) error {
 }
 
 // Options configures the adapter. Empty Socket is tmux's default for the
-// serving user; empty LogDir is termlog.DefaultDir.
+// serving user; empty LogDir is termlog.DefaultDir; LogMaxBytes <= 0 is
+// termlog.DefaultMaxBytes.
 type Options struct {
-	Socket string
-	LogDir string
+	Socket      string
+	LogDir      string
+	LogMaxBytes int64
 }
 
 // NewWithOptions is New with a log directory for tapped panes.
 func NewWithOptions(o Options) *Adapter {
 	a := NewWithRunner(ExecRunner{Socket: o.Socket})
-	a.logs = &termlog.Store{Dir: o.LogDir}
-	if o.LogDir == "" {
-		a.logs.Dir = termlog.DefaultDir()
-	}
+	a.SetLogDir(o.LogDir)
+	a.logMax = o.LogMaxBytes
 	return a
 }
 
-// SetLogDir points tapped-pane logs at dir. Tests use it with a fake runner.
-func (a *Adapter) SetLogDir(dir string) { a.logs = &termlog.Store{Dir: dir} }
+// SetLogDir points tapped-pane logs at dir (empty: the default). The
+// writer tmux will run is this executable's shell-writer subcommand.
+func (a *Adapter) SetLogDir(dir string) {
+	if dir == "" {
+		dir = termlog.DefaultDir()
+	}
+	a.logs = &termlog.Store{Dir: dir}
+	if exe, err := os.Executable(); err == nil {
+		a.writer = exe
+	}
+}
+
+// SetLogMax caps each tapped pane's on-disk log in bytes.
+func (a *Adapter) SetLogMax(n int64) { a.logMax = n }
+
+// WriterSubcommand is the argv[1] this binary must dispatch to
+// termlog.RunWriter for taps to record anything.
+const WriterSubcommand = "shell-writer"
 
 // Tap is shell/tap: the pane's tmux history so far becomes the head of a
 // log and tmux pipes everything the pane outputs from now on to its tail.
@@ -624,7 +662,10 @@ type History struct {
 	// tmux is at its limit now.
 	TappedSince     string `json:"tapped_since,omitempty"`
 	TruncatedBefore bool   `json:"truncated_before"`
-	HistoryLimit    int    `json:"history_limit,omitempty"`
+	// DroppedBefore is the oldest offset still on disk for a tapped pane;
+	// the size cap rotated out everything before it.
+	DroppedBefore int64 `json:"dropped_before,omitempty"`
+	HistoryLimit  int   `json:"history_limit,omitempty"`
 }
 
 // StartTap seeds a log from tmux's history and starts pipe-pane into it.
@@ -641,20 +682,38 @@ func (a *Adapter) StartTap(ctx context.Context, name, pane string) (Tap, error) 
 	if err != nil {
 		return Tap{}, err
 	}
-	logPath, err := a.logs.Seed(name, paneID, seed, truncated, a.now())
+	cmd, err := a.writerCommand(name, paneID)
 	if err != nil {
 		return Tap{}, err
 	}
-	// pipe-pane runs its command through the user's shell; the path is
-	// vetted by the store to contain no quote, so single quotes hold.
-	if _, err := a.runner.Run(ctx, "pipe-pane", "-t", target, "cat >> '"+logPath+"'"); err != nil {
+	if err := a.logs.Seed(name, paneID, seed, truncated, a.now()); err != nil {
+		return Tap{}, err
+	}
+	if _, err := a.runner.Run(ctx, "pipe-pane", "-t", target, cmd); err != nil {
 		return Tap{}, mapErr(err)
 	}
 	m, _ := a.logs.Meta(name, paneID)
+	logPath, _ := a.logs.Path(name, paneID)
 	return Tap{
 		Pane: paneID, Log: logPath, TappedSince: m.TappedSince,
 		SeedLines: strings.Count(seed, "\n"), SeedTruncated: truncated,
 	}, nil
+}
+
+// writerCommand is the shell line tmux runs for a tapped pane. pipe-pane
+// hands it to the user's shell, so every argument is single-quoted and
+// vetted to contain no quote. The store already refused names and dirs
+// with one; the executable path is checked here.
+func (a *Adapter) writerCommand(name, paneID string) (string, error) {
+	if a.writer == "" || strings.ContainsAny(a.writer, "'\n") {
+		return "", fmt.Errorf("tmux: no usable writer executable for pipe-pane")
+	}
+	max := a.logMax
+	if max <= 0 {
+		max = termlog.DefaultMaxBytes
+	}
+	return fmt.Sprintf("'%s' %s --dir '%s' --shell '%s' --pane '%s' --max %d",
+		a.writer, WriterSubcommand, a.logs.Dir, name, paneID, max), nil
 }
 
 // StopTap ends pipe-pane. The log stays on disk unless forget is set.
@@ -689,7 +748,8 @@ func (a *Adapter) ReadHistory(ctx context.Context, name, pane string, from, befo
 			return History{
 				Source: "tap", Pane: paneID, Lines: page.Lines,
 				From: page.From, Next: page.Next, Size: page.Size,
-				TappedSince: page.Meta.TappedSince, TruncatedBefore: page.Meta.SeedTruncated,
+				TappedSince: page.Meta.TappedSince, DroppedBefore: page.Meta.DroppedBefore,
+				TruncatedBefore: page.Meta.SeedTruncated || page.Meta.DroppedBefore > 0,
 			}, nil
 		}
 		if !errors.Is(err, termlog.ErrNoLog) {

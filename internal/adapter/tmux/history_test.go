@@ -3,9 +3,12 @@ package tmux
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/pyrex41/huginn/internal/termlog"
 )
 
 // histRunner is a tmux stand-in for the tap and history paths.
@@ -23,7 +26,7 @@ func (r *histRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
 	case args[0] == "list-sessions":
 		return []byte("build:1:0:1700000000:/b\n"), nil
 	case args[0] == "list-panes":
-		return []byte("build:0:0:%4:1:bash:/b\n"), nil
+		return []byte("build:0:0:%4:1:0:bash:/b\n"), nil
 	case args[0] == "capture-pane":
 		return []byte(r.history), nil
 	case args[0] == "display-message" && strings.Contains(joined, "#{pane_id}"):
@@ -62,16 +65,34 @@ func TestHistoryUntappedFallsBackToTmux(t *testing.T) {
 	}
 }
 
+func TestNewShellTaps(t *testing.T) {
+	r := &histRunner{history: "", histSize: 0, histLimit: 2000}
+	a := NewWithRunner(r)
+	a.SetLogDir(t.TempDir())
+	row, err := a.NewShell(context.Background(), "build", "/b", "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Tap == nil || row.Tap.Pane != "%4" {
+		t.Fatalf("row=%+v", row)
+	}
+	row, _ = a.NewShell(context.Background(), "build", "", "", false)
+	if row.Tap != nil {
+		t.Fatal("untapped new must not carry a tap")
+	}
+}
+
 func TestTapSeedsAndPipes(t *testing.T) {
 	r := &histRunner{history: "old\n", histSize: 1, histLimit: 2000}
 	a := NewWithRunner(r)
 	dir := t.TempDir()
 	a.SetLogDir(dir)
+	a.SetLogMax(1024)
 	tap, err := a.StartTap(context.Background(), "build", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tap.Pane != "%4" || tap.SeedLines != 1 || tap.SeedTruncated || !strings.HasSuffix(tap.Log, "/build/4.log") {
+	if tap.Pane != "%4" || tap.SeedLines != 1 || tap.SeedTruncated || !strings.HasSuffix(tap.Log, "/build/4.*.log") {
 		t.Fatalf("tap=%+v", tap)
 	}
 	var pipe []string
@@ -80,13 +101,15 @@ func TestTapSeedsAndPipes(t *testing.T) {
 			pipe = c
 		}
 	}
-	if pipe == nil || pipe[len(pipe)-1] != "cat >> '"+tap.Log+"'" {
-		t.Fatalf("pipe-pane=%v", pipe)
+	exe, _ := os.Executable()
+	wantCmd := "'" + exe + "' shell-writer --dir '" + dir + "' --shell 'build' --pane '%4' --max 1024"
+	if pipe == nil || pipe[len(pipe)-1] != wantCmd {
+		t.Fatalf("pipe-pane=%v\nwant %s", pipe, wantCmd)
 	}
-	// tmux appends live output; history now comes from the log.
-	f, _ := os.OpenFile(tap.Log, os.O_APPEND|os.O_WRONLY, 0o600)
-	_, _ = f.WriteString("$ make\r\nbuilding\rbuilt   \x1b[K\r\n")
-	f.Close()
+	// tmux feeds live output to the writer; history now comes from the log.
+	if code := termlog.RunWriter([]string{"--dir", dir, "--shell", "build", "--pane", "%4"}, strings.NewReader("$ make\r\nbuilding\rbuilt   \x1b[K\r\n"), os.Stderr); code != 0 {
+		t.Fatalf("writer exit %d", code)
+	}
 	h, err := a.ReadHistory(context.Background(), "build", "%4", -1, 0, 10)
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +126,7 @@ func TestTapSeedsAndPipes(t *testing.T) {
 	if err := a.StopTap(context.Background(), "build", "", true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(tap.Log); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, "build", "4.0.log")); !os.IsNotExist(err) {
 		t.Fatal("forget must remove the log")
 	}
 	h, _ = a.ReadHistory(context.Background(), "build", "", -1, 0, 10)

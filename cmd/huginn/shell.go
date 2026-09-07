@@ -18,7 +18,7 @@ Usage:
   huginn shell screen --name NAME [--pane P] [--lines N]
   huginn shell send   --name NAME [--pane P] [--enter] [--expect-gen G] TEXT…
   huginn shell keys   --name NAME [--pane P] [--expect-gen G] KEY…
-  huginn shell new    --name NAME [--cwd DIR] [--command CMD]
+  huginn shell new    --name NAME [--cwd DIR] [--command CMD] [--tap]
   huginn shell kill   --name NAME
   huginn shell tap    --name NAME [--pane P] [--off | --forget]
   huginn shell history --name NAME [--pane P] [--from OFF | --before OFF] [--count N]
@@ -55,6 +55,7 @@ func runShell(args []string) int {
 	cursor := fs.String("cursor", "", "continue from a previous nextCursor")
 	cwd := fs.String("cwd", "", "working directory for the new shell")
 	command := fs.String("command", "", "program to run instead of the login shell")
+	tap := fs.Bool("tap", false, "new: record the shell from its first byte")
 	off := fs.Bool("off", false, "tap: stop recording, keep the log")
 	forget := fs.Bool("forget", false, "tap: stop recording and delete the log")
 	from := fs.Int64("from", -1, "history: read forward from this offset")
@@ -72,7 +73,7 @@ func runShell(args []string) int {
 	method, err := shellRequest(sub, params, fs.Args(), shellFlags{
 		Name: *name, Pane: *pane, Lines: *lines, Enter: *enter, ExpectGen: *expectGen,
 		Limit: *limit, Cursor: *cursor, CWD: *cwd, Command: *command,
-		Off: *off, Forget: *forget, From: *from, Before: *before, Count: *count,
+		Off: *off, Forget: *forget, From: *from, Before: *before, Count: *count, Tap: *tap,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "huginn shell: %v\n", err)
@@ -97,6 +98,7 @@ type shellFlags struct {
 	Off, Forget  bool
 	From, Before int64
 	Count        int
+	Tap          bool
 }
 
 // shellRequest fills params for one subcommand and names its RPC method.
@@ -168,6 +170,9 @@ func shellRequest(sub string, params map[string]any, positional []string, f shel
 		}
 		if f.Command != "" {
 			params["command"] = f.Command
+		}
+		if f.Tap {
+			params["tap"] = true
 		}
 		return broker.MethodShellNew, nil
 	case "kill":

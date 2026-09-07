@@ -130,6 +130,7 @@ func shellWriteTools() []map[string]any {
 					"name":    map[string]any{"type": "string", "description": "Name for the new shell; no colons or periods"},
 					"cwd":     map[string]any{"type": "string", "description": "Working directory"},
 					"command": map[string]any{"type": "string", "description": "Program to run instead of the login shell"},
+					"tap":     map[string]any{"type": "boolean", "description": "Record the shell from its first byte so shell_history is complete"},
 				},
 				"required": []string{"machine", "name"},
 			},
