@@ -74,6 +74,62 @@ func TestLiveTmux(t *testing.T) {
 	if _, err := a.Keys(ctx, "hg-test", "", []string{"C-c"}, ""); err != nil {
 		t.Fatal(err)
 	}
+
+	// History beyond tmux's limit: cap tmux at a handful of lines, tap the
+	// pane, print more than that, and the log has them all while tmux's
+	// own history admits it dropped some.
+	a.SetLogDir(t.TempDir())
+	if _, err := (ExecRunner{Socket: sock}).Run(ctx, "set-option", "-g", "history-limit", "5"); err != nil {
+		t.Fatal(err)
+	}
+	// history-limit applies to panes created after it is set.
+	if _, err := (ExecRunner{Socket: sock}).Run(ctx, "split-window", "-t", "=hg-test:", "-d"); err != nil {
+		t.Fatal(err)
+	}
+	sh, _ := a.Get(ctx, "hg-test")
+	if len(sh.Panes) != 2 {
+		t.Fatalf("panes=%+v", sh.Panes)
+	}
+	pane := sh.Panes[1].ID
+	tap, err := a.StartTap(ctx, "hg-test", pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tap.Pane != pane {
+		t.Fatalf("tap=%+v", tap)
+	}
+	if _, err := a.Send(ctx, "hg-test", pane, "for i in $(seq 1 60); do echo line-$i; done; echo END", true, ""); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(10 * time.Second)
+	var h History
+	for {
+		h, err = a.ReadHistory(ctx, "hg-test", pane, -1, 0, 1000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(lineTexts(h), "|END") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("never saw END in history: %s", lineTexts(h))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if h.Source != "tap" || !strings.Contains(lineTexts(h), "line-1|line-2|") || !strings.Contains(lineTexts(h), "line-60|END") {
+		t.Fatalf("tapped history lost lines: source=%s %s", h.Source, lineTexts(h))
+	}
+	// The untapped view of the same pane is tmux's, and it is short.
+	if err := a.StopTap(ctx, "hg-test", pane, true); err != nil {
+		t.Fatal(err)
+	}
+	h2, err := a.ReadHistory(ctx, "hg-test", pane, -1, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h2.Source != "tmux" || !h2.TruncatedBefore || strings.Contains(lineTexts(h2), "line-1|") {
+		t.Fatalf("tmux history should be truncated: %+v", h2)
+	}
 	if err := a.Kill(ctx, "hg-test"); err != nil {
 		t.Fatal(err)
 	}

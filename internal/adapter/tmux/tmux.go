@@ -22,6 +22,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pyrex41/huginn/internal/termlog"
 )
 
 // Runner executes one tmux command against one server and returns its
@@ -153,6 +155,7 @@ type Adapter struct {
 	runner Runner
 	host   string
 	now    func() time.Time
+	logs   *termlog.Store
 }
 
 // New wraps tmux on the given socket. Empty socket is tmux's default for
@@ -572,4 +575,219 @@ func mapErr(err error) error {
 		return ErrNotFound
 	}
 	return err
+}
+
+// Options configures the adapter. Empty Socket is tmux's default for the
+// serving user; empty LogDir is termlog.DefaultDir.
+type Options struct {
+	Socket string
+	LogDir string
+}
+
+// NewWithOptions is New with a log directory for tapped panes.
+func NewWithOptions(o Options) *Adapter {
+	a := NewWithRunner(ExecRunner{Socket: o.Socket})
+	a.logs = &termlog.Store{Dir: o.LogDir}
+	if o.LogDir == "" {
+		a.logs.Dir = termlog.DefaultDir()
+	}
+	return a
+}
+
+// SetLogDir points tapped-pane logs at dir. Tests use it with a fake runner.
+func (a *Adapter) SetLogDir(dir string) { a.logs = &termlog.Store{Dir: dir} }
+
+// Tap is shell/tap: the pane's tmux history so far becomes the head of a
+// log and tmux pipes everything the pane outputs from now on to its tail.
+type Tap struct {
+	Pane        string `json:"pane"`
+	Log         string `json:"log"`
+	TappedSince string `json:"tapped_since"`
+	// SeedLines is how many lines of tmux history seeded the log;
+	// SeedTruncated says tmux had already dropped older ones.
+	SeedLines     int  `json:"seed_lines"`
+	SeedTruncated bool `json:"seed_truncated"`
+}
+
+// History is shell/history. Source is "tap" when read from a log and
+// "tmux" when the pane is untapped and this is tmux's bounded history.
+type History struct {
+	Source string         `json:"source"`
+	Pane   string         `json:"pane"`
+	Lines  []termlog.Line `json:"lines"`
+	From   int64          `json:"from"`
+	Next   int64          `json:"next"`
+	Size   int64          `json:"size"`
+	// TappedSince is set for a tapped pane. TruncatedBefore is true when
+	// older lines than the first one here existed but are gone: tmux's
+	// history limit was hit before the tap, or the pane is untapped and
+	// tmux is at its limit now.
+	TappedSince     string `json:"tapped_since,omitempty"`
+	TruncatedBefore bool   `json:"truncated_before"`
+	HistoryLimit    int    `json:"history_limit,omitempty"`
+}
+
+// StartTap seeds a log from tmux's history and starts pipe-pane into it.
+// Tapping an already tapped pane restarts the log from current history.
+func (a *Adapter) StartTap(ctx context.Context, name, pane string) (Tap, error) {
+	if a.logs == nil {
+		return Tap{}, termlog.ErrNoLog
+	}
+	target, paneID, err := a.paneTarget(ctx, name, pane)
+	if err != nil {
+		return Tap{}, err
+	}
+	seed, truncated, _, err := a.tmuxHistory(ctx, target)
+	if err != nil {
+		return Tap{}, err
+	}
+	logPath, err := a.logs.Seed(name, paneID, seed, truncated, a.now())
+	if err != nil {
+		return Tap{}, err
+	}
+	// pipe-pane runs its command through the user's shell; the path is
+	// vetted by the store to contain no quote, so single quotes hold.
+	if _, err := a.runner.Run(ctx, "pipe-pane", "-t", target, "cat >> '"+logPath+"'"); err != nil {
+		return Tap{}, mapErr(err)
+	}
+	m, _ := a.logs.Meta(name, paneID)
+	return Tap{
+		Pane: paneID, Log: logPath, TappedSince: m.TappedSince,
+		SeedLines: strings.Count(seed, "\n"), SeedTruncated: truncated,
+	}, nil
+}
+
+// StopTap ends pipe-pane. The log stays on disk unless forget is set.
+func (a *Adapter) StopTap(ctx context.Context, name, pane string, forget bool) error {
+	if a.logs == nil {
+		return termlog.ErrNoLog
+	}
+	target, paneID, err := a.paneTarget(ctx, name, pane)
+	if err != nil {
+		return err
+	}
+	if _, err := a.runner.Run(ctx, "pipe-pane", "-t", target); err != nil {
+		return mapErr(err)
+	}
+	if forget {
+		return a.logs.Forget(name, paneID)
+	}
+	return nil
+}
+
+// ReadHistory pages a pane's history: the tapped log when there is one,
+// tmux's bounded history otherwise. from, before, and count are as in
+// termlog.Store.Read; from < 0 with before == 0 is the tail.
+func (a *Adapter) ReadHistory(ctx context.Context, name, pane string, from, before int64, count int) (History, error) {
+	target, paneID, err := a.paneTarget(ctx, name, pane)
+	if err != nil {
+		return History{}, err
+	}
+	if a.logs != nil {
+		page, err := a.logs.Read(name, paneID, from, before, count)
+		if err == nil {
+			return History{
+				Source: "tap", Pane: paneID, Lines: page.Lines,
+				From: page.From, Next: page.Next, Size: page.Size,
+				TappedSince: page.Meta.TappedSince, TruncatedBefore: page.Meta.SeedTruncated || page.From > 0,
+			}, nil
+		}
+		if !errors.Is(err, termlog.ErrNoLog) {
+			return History{}, err
+		}
+	}
+	text, truncated, limit, err := a.tmuxHistory(ctx, target)
+	if err != nil {
+		return History{}, err
+	}
+	lines := termlog.Render([]byte(text), 0)
+	if count <= 0 {
+		count = 200
+	}
+	h := History{Source: "tmux", Pane: paneID, Lines: []termlog.Line{}, Size: int64(len(text)), TruncatedBefore: truncated, HistoryLimit: limit}
+	switch {
+	case before > 0:
+		var kept []termlog.Line
+		for _, l := range lines {
+			if l.Offset < before {
+				kept = append(kept, l)
+			}
+		}
+		if len(kept) > count {
+			kept = kept[len(kept)-count:]
+		}
+		lines = kept
+		h.Next = before
+	case from >= 0:
+		var kept []termlog.Line
+		for _, l := range lines {
+			if l.Offset >= from {
+				kept = append(kept, l)
+			}
+		}
+		if len(kept) > count {
+			h.Next = kept[count].Offset
+			kept = kept[:count]
+		} else {
+			h.Next = h.Size
+		}
+		lines = kept
+	default:
+		if len(lines) > count {
+			lines = lines[len(lines)-count:]
+		}
+		h.Next = h.Size
+	}
+	if lines != nil {
+		h.Lines = lines
+	}
+	if len(h.Lines) > 0 {
+		h.From = h.Lines[0].Offset
+	}
+	return h, nil
+}
+
+// tmuxHistory is capture-pane over the whole history plus whether tmux
+// was already at its limit (older lines gone) and what that limit is.
+func (a *Adapter) tmuxHistory(ctx context.Context, target string) (text string, truncated bool, limit int, err error) {
+	out, err := a.runner.Run(ctx, "capture-pane", "-p", "-J", "-t", target, "-S", "-", "-E", "-")
+	if err != nil {
+		return "", false, 0, mapErr(err)
+	}
+	text = strings.TrimRight(string(out), " \n")
+	if text != "" {
+		text += "\n"
+	}
+	hs, err := a.runner.Run(ctx, "display-message", "-p", "-t", target, "-F", "#{history_size}:#{history_limit}")
+	if err != nil {
+		return text, false, 0, nil
+	}
+	f := strings.Split(strings.TrimSpace(string(hs)), sep)
+	if len(f) == 2 {
+		size, _ := strconv.Atoi(f[0])
+		limit, _ = strconv.Atoi(f[1])
+		truncated = limit > 0 && size >= limit
+	}
+	return text, truncated, limit, nil
+}
+
+// paneTarget resolves name + pane to a tmux target and the pane's %id,
+// which is what the log is keyed by.
+func (a *Adapter) paneTarget(ctx context.Context, name, pane string) (target, paneID string, err error) {
+	target, err = a.target(ctx, name, pane)
+	if err != nil {
+		return "", "", err
+	}
+	if strings.HasPrefix(pane, "%") {
+		return target, pane, nil
+	}
+	out, err := a.runner.Run(ctx, "display-message", "-p", "-t", target, "-F", "#{pane_id}")
+	if err != nil {
+		return "", "", mapErr(err)
+	}
+	paneID = strings.TrimSpace(string(out))
+	if !strings.HasPrefix(paneID, "%") {
+		return "", "", ErrNotFound
+	}
+	return target, paneID, nil
 }
