@@ -146,7 +146,7 @@ func TestShellListPages(t *testing.T) {
 }
 
 func TestShellScreenGenAndStaleSend(t *testing.T) {
-	r := &scriptRunner{screens: []string{"$ \n", "$ \n", "$ ls\nfoo\n"}}
+	r := &scriptRunner{screens: []string{"$\n", "$\n", "$ ls\nfoo\n"}}
 	ts := shellServer(t, r)
 	res, rpcErr := shellCall(t, ts, "test-token", MethodShellScreen, `{"name":"build"}`)
 	if rpcErr != nil {
@@ -154,7 +154,7 @@ func TestShellScreenGenAndStaleSend(t *testing.T) {
 	}
 	var scr tmux.Screen
 	_ = json.Unmarshal(res, &scr)
-	if scr.Gen != tmux.Digest("$ \n") || scr.Text != "$ \n" {
+	if scr.Gen != tmux.Digest("$\n") || scr.Text != "$\n" {
 		t.Fatalf("screen=%+v", scr)
 	}
 	// Second capture matches: send goes through.

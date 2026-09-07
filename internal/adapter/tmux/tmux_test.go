@@ -147,13 +147,13 @@ func TestSendRefusesWhenScreenMoved(t *testing.T) {
 }
 
 func TestSendLiteralThenEnter(t *testing.T) {
-	f := &fakeRunner{screens: []string{"$ \n", "$ make\n"}}
+	f := &fakeRunner{screens: []string{"$\n", "$ make\n"}}
 	a := NewWithRunner(f)
-	res, err := a.Send(context.Background(), "build", "", "make -j4", true, Digest("$ \n"))
+	res, err := a.Send(context.Background(), "build", "", "make -j4", true, Digest("$\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.GenBefore != Digest("$ \n") || res.GenAfter != Digest("$ make\n") {
+	if res.GenBefore != Digest("$\n") || res.GenAfter != Digest("$ make\n") {
 		t.Fatalf("gens=%+v", res)
 	}
 	var sends [][]string
