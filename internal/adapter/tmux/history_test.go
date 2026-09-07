@@ -94,6 +94,12 @@ func TestTapSeedsAndPipes(t *testing.T) {
 	if h.Source != "tap" || lineTexts(h) != "old|$ make|built" || h.TruncatedBefore || h.TappedSince == "" {
 		t.Fatalf("h=%+v", h)
 	}
+	// A tail page with earlier lines still in the log is not truncated:
+	// those lines are one `before` read away.
+	tail, _ := a.ReadHistory(context.Background(), "build", "%4", -1, 0, 1)
+	if tail.TruncatedBefore || tail.From == 0 || lineTexts(tail) != "built" {
+		t.Fatalf("tail=%+v", tail)
+	}
 	if err := a.StopTap(context.Background(), "build", "", true); err != nil {
 		t.Fatal(err)
 	}

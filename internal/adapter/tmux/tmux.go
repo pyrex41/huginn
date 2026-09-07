@@ -689,7 +689,7 @@ func (a *Adapter) ReadHistory(ctx context.Context, name, pane string, from, befo
 			return History{
 				Source: "tap", Pane: paneID, Lines: page.Lines,
 				From: page.From, Next: page.Next, Size: page.Size,
-				TappedSince: page.Meta.TappedSince, TruncatedBefore: page.Meta.SeedTruncated || page.From > 0,
+				TappedSince: page.Meta.TappedSince, TruncatedBefore: page.Meta.SeedTruncated,
 			}, nil
 		}
 		if !errors.Is(err, termlog.ErrNoLog) {
