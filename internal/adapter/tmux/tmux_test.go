@@ -196,6 +196,18 @@ func TestKeysAreNames(t *testing.T) {
 	}
 }
 
+func TestScreenTrimsPaddedTail(t *testing.T) {
+	f := &fakeRunner{screens: []string{"$ ls\nfoo\n\n\n\n\n"}}
+	a := NewWithRunner(f)
+	scr, err := a.Screen(context.Background(), "build", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scr.Text != "$ ls\nfoo\n" || scr.Gen != Digest("$ ls\nfoo\n") {
+		t.Fatalf("screen=%q", scr.Text)
+	}
+}
+
 func TestPaneIDMustBelongToShell(t *testing.T) {
 	f := &fakeRunner{replies: map[string][]byte{
 		"list-sessions": []byte("build:1:0:1700000000:/b\n"),

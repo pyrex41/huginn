@@ -275,7 +275,9 @@ func (a *Adapter) capture(ctx context.Context, target string, lines int) (Screen
 	if err != nil {
 		return Screen{}, mapErr(err)
 	}
-	text := string(out)
+	// capture-pane pads to the pane height; drop the blank tail so a
+	// caller sees the screen, not the window size, and gen digests that.
+	text := strings.TrimRight(string(out), " \n") + "\n"
 	scr := Screen{Text: text, Gen: Digest(text)}
 	cur, err := a.runner.Run(ctx, "display-message", "-p", "-t", target, "-F", "#{cursor_x}:#{cursor_y}")
 	if err == nil {
