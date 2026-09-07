@@ -167,6 +167,8 @@ shell/send    {host, name, pane?, text, enter?, expect_gen?} -> gen_before, gen_
 shell/keys    {host, name, pane?, keys[], expect_gen?}       -> gen_before, gen_after
 shell/new     {host, name, cwd?, command?}                   -> row
 shell/kill    {host, name}                                   -> ok
+shell/tap     {host, name, pane?, off?, forget?}             -> pane, log, tapped_since, seed_lines, seed_truncated
+shell/history {host, name, pane?, from?, before?, count?}    -> source, lines[{offset,text}], from, next, size, truncated_before
 ```
 
 A row names host, name, windows, panes (each with its tmux `%id`, index,
@@ -192,11 +194,42 @@ cwd, and running command), cwd, attached, created. Rules:
   resolves to a shell, and a coding agent running inside a shell is a
   process in a pane, not a session row.
 
+### History
+
+Scrollback is not a property of a shell. The shell writes bytes to a PTY
+and forgets them; whatever holds the other end keeps a bounded copy of the
+rendered lines in memory. So every emulator, tmux included, gives you a
+capped history, and owning the PTY would only move the cap into huginn.
+
+`shell/tap` records instead. It copies tmux's history so far into a log
+file as the head, then `pipe-pane` appends every byte the pane outputs from
+then on. The log is unbounded, survives huginn restarts, and keeps filling
+while a human is attached in another terminal. `shell/history` renders it
+into lines with byte offsets as cursors: no argument is the tail, `from`
+reads forward from a line's offset, `before` reads the lines ending before
+one. Rendering is linear: carriage returns, backspaces, erase-line, and
+horizontal cursor motion are honoured so a redrawn progress bar reads as
+its final state; colours, alternate screens, and row addressing are
+dropped, so a full-screen program shows as its line stream, not a screen.
+
+An untapped pane still answers `shell/history`, from tmux's own bounded
+history, with `source: "tmux"`, `history_limit`, and `truncated_before`
+set when tmux has already dropped lines. Raise `history-limit` in the
+machine's tmux config to widen that window without tapping.
+
+Logs live under `--shell-log-dir` (default `$XDG_STATE_HOME/huginn/shells`,
+mode 0600) on the machine that owns the pane. That is a deliberate
+relaxation of refusal R4: it is the user's own terminal transcript, on the
+user's own machine, written only when a caller asked for it, the same
+category as `script` or a shell history file. Nothing is copied off the
+machine except what a `shell/history` page returns. `forget` deletes it.
+
 Surfaced wherever the session verbs are: broker JSON-RPC, `huginn shell
 list|screen|send|keys|new|kill`, the zmqcat worker (a hub reaches a
 machine's shells the same way it reaches its sessions), and `huginn-mcp`
-(`shell_list`, `shell_screen` always; `shell_send`, `shell_keys`,
-`shell_new`, `shell_kill` behind `--shell-write`). The Tailcat overlay
+(`shell_list`, `shell_screen`, `shell_history` always; `shell_send`,
+`shell_keys`, `shell_new`, `shell_kill`, `shell_tap` behind
+`--shell-write`). The Tailcat overlay
 forwards TCP to the loopback port and never looks at a method name, so it
 needed no change.
 
@@ -303,7 +336,8 @@ grokbot can:
 - approve or deny a tool prompt when the adapter supports it
 - resume a disk session into a live adapter when asked
 - with `--shell`: list a machine's tmux shells, read a pane, type a command
-  or a key into a named shell, open or kill one
+  or a key into a named shell, open or kill one, tap a pane and page its
+  full history back
 
 grokbot cannot:
 
@@ -312,9 +346,9 @@ grokbot cannot:
 - silently auto-approve every tool (permission policy is explicit per
   attach, default deny-until-configured)
 - drive a session whose runtime is not installed on that host
-- read a shell beyond what tmux keeps in that pane's history, hold a lease
-  on a shell, attach to one, or treat an agent running in a shell as an
-  agent session
+- read a shell's past from before it was tapped beyond what tmux kept, hold
+  a lease on a shell, attach to one, or treat an agent running in a shell
+  as an agent session
 
 ## Try the zmqcat mailbox transport
 
@@ -396,9 +430,10 @@ Two session tools, both read-only:
   at once when `machine` is omitted
 
 Plus the shell tools for machines running `huginn serve --shell`:
-`shell_list` (fans out like `sessions_list`) and `shell_screen` always;
-`shell_send`, `shell_keys`, `shell_new`, `shell_kill` only with
-`--shell-write`, for the reason in the next section.
+`shell_list` (fans out like `sessions_list`), `shell_screen`, and
+`shell_history` always; `shell_send`, `shell_keys`, `shell_new`,
+`shell_kill`, `shell_tap` only with `--shell-write`, for the reason in the
+next section.
 
 Fan-out is per-machine tolerant: one unreachable host comes back as a row
 with an `error`, not a failed call, so a single dead laptop cannot blind the
@@ -467,7 +502,10 @@ already stored.
 
 **R4. It does not store user content.**
 No transcript archive, no screenshot of a TUI, no object store. Pointers
-and liveness only.
+and liveness only. One exception, opt-in per pane: `shell/tap` writes that
+pane's output to a log on the same machine, under the user's own state
+directory, because unbounded shell history cannot exist any other way.
+Nothing leaves the machine unpaged, and `forget` removes it.
 
 **R5. It has no vocabulary for where the process runs beyond this host.**
 No Cluster, Pod, Harness, Workspace-as-a-type. Opaque labels if a caller
@@ -558,6 +596,7 @@ internal/broker/     the five verbs, plus the shell family when enabled
 internal/overlay/    optional Tailcat transport (not a verb)
 internal/adapter/    grok, codex, claude — native protocols only
 internal/adapter/tmux/  the shell family: tmux, and only tmux
+internal/termlog/    tapped pane logs and the linear renderer behind shell/history
 internal/discover/   live vs resumable probes
 internal/presence/   who is on the bus
 nix/                 packaging and the service modules

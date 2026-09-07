@@ -92,6 +92,9 @@ chmod 600 ~/.config/huginn/token
 To serve the machine's tmux shells as well, pass `--shell` (and
 `--tmux-socket PATH` if the server is not on tmux's default socket). This is
 off by default; read the trust note below before turning it on.
+`shell/tap` writes pane logs under `--shell-log-dir`, default
+`$XDG_STATE_HOME/huginn/shells` or `~/.local/state/huginn/shells`; they
+grow until a caller passes `forget`.
 
 The machine also needs a local socket onto the hub's bus. Put the `tc…`
 token from step 1 in a file and join:
@@ -195,4 +198,8 @@ Read this before enabling it anywhere shared.
   exactly the people who may already log in as that user. On the hub,
   `huginn-mcp --shell-write` extends the same reach to every harness with
   the MCP token; without it the endpoint only lists shells and reads
-  screens.
+  screens and history.
+- **A tapped pane is recorded to disk.** `shell/tap` keeps everything that
+  pane prints, passwords echoed by a misbehaving program included, in a
+  0600 file under your state directory on that machine. It stays until
+  `shell/tap` with `forget`. Do not tap a pane you would not `script`.
