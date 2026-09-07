@@ -20,6 +20,8 @@ const (
 	MethodShellKeys   = "shell/keys"
 	MethodShellNew    = "shell/new"
 	MethodShellKill   = "shell/kill"
+	MethodShellTap    = "shell/tap"
+	MethodShellHist   = "shell/history"
 )
 
 const (
@@ -35,7 +37,7 @@ const (
 // ShellMethods lists the verbs the shell family adds, for callers that
 // want to know before dispatching.
 func ShellMethods() []string {
-	return []string{MethodShellList, MethodShellScreen, MethodShellSend, MethodShellKeys, MethodShellNew, MethodShellKill}
+	return []string{MethodShellList, MethodShellScreen, MethodShellSend, MethodShellKeys, MethodShellNew, MethodShellKill, MethodShellTap, MethodShellHist}
 }
 
 func isShellMethod(m string) bool {
@@ -90,6 +92,26 @@ type shellNewParams struct {
 	Command string `json:"command,omitempty"`
 }
 
+type shellTapParams struct {
+	Host string `json:"host,omitempty"`
+	Name string `json:"name"`
+	Pane string `json:"pane,omitempty"`
+	// Off stops recording; Forget also deletes the log.
+	Off    bool `json:"off,omitempty"`
+	Forget bool `json:"forget,omitempty"`
+}
+
+type shellHistoryParams struct {
+	Host string `json:"host,omitempty"`
+	Name string `json:"name"`
+	Pane string `json:"pane,omitempty"`
+	// From reads forward from a line offset; Before reads the lines ending
+	// before one; neither is the tail. Count caps lines (default 200).
+	From   *int64 `json:"from,omitempty"`
+	Before int64  `json:"before,omitempty"`
+	Count  int    `json:"count,omitempty"`
+}
+
 type shellKillParams struct {
 	Host string `json:"host,omitempty"`
 	Name string `json:"name"`
@@ -115,6 +137,10 @@ func (s *Server) dispatchShell(ctx context.Context, req request) response {
 		return s.shellNew(ctx, req)
 	case MethodShellKill:
 		return s.shellKill(ctx, req)
+	case MethodShellTap:
+		return s.shellTap(ctx, req)
+	case MethodShellHist:
+		return s.shellHistory(ctx, req)
 	default:
 		return errorResponse(req.ID, CodeMethodNotFound, "method not found")
 	}
@@ -243,6 +269,58 @@ func (s *Server) shellKill(ctx context.Context, req request) response {
 		return shellErr(req.ID, err, nil)
 	}
 	return resultResponse(req.ID, map[string]any{"ok": true})
+}
+
+func (s *Server) shellTap(ctx context.Context, req request) response {
+	var p shellTapParams
+	if err := decodeParams(req.Params, &p); err != nil || p.Name == "" {
+		return errorResponse(req.ID, CodeInvalidParams, "name required")
+	}
+	if !s.hostMatches(p.Host) {
+		return shellErr(req.ID, tmux.ErrNotFound, nil)
+	}
+	if p.Off || p.Forget {
+		if err := s.shells.StopTap(ctx, p.Name, p.Pane, p.Forget); err != nil {
+			return shellErr(req.ID, err, nil)
+		}
+		return resultResponse(req.ID, map[string]any{"ok": true, "tapped": false})
+	}
+	tap, err := s.shells.StartTap(ctx, p.Name, p.Pane)
+	if err != nil {
+		return shellErr(req.ID, err, nil)
+	}
+	return resultResponse(req.ID, tap)
+}
+
+const maxHistoryCount = 5000
+
+func (s *Server) shellHistory(ctx context.Context, req request) response {
+	var p shellHistoryParams
+	if err := decodeParams(req.Params, &p); err != nil || p.Name == "" {
+		return errorResponse(req.ID, CodeInvalidParams, "name required")
+	}
+	if !s.hostMatches(p.Host) {
+		return shellErr(req.ID, tmux.ErrNotFound, nil)
+	}
+	from := int64(-1)
+	if p.From != nil {
+		if *p.From < 0 {
+			return errorResponse(req.ID, CodeInvalidParams, "from must be >= 0")
+		}
+		from = *p.From
+	}
+	if p.Before < 0 {
+		return errorResponse(req.ID, CodeInvalidParams, "before must be >= 0")
+	}
+	count := p.Count
+	if count > maxHistoryCount {
+		count = maxHistoryCount
+	}
+	h, err := s.shells.ReadHistory(ctx, p.Name, p.Pane, from, p.Before, count)
+	if err != nil {
+		return shellErr(req.ID, err, nil)
+	}
+	return resultResponse(req.ID, h)
 }
 
 // shellErr maps adapter errors onto typed codes. A stale expect_gen carries

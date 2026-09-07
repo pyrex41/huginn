@@ -20,6 +20,8 @@ Usage:
   huginn shell keys   --name NAME [--pane P] [--expect-gen G] KEY…
   huginn shell new    --name NAME [--cwd DIR] [--command CMD]
   huginn shell kill   --name NAME
+  huginn shell tap    --name NAME [--pane P] [--off | --forget]
+  huginn shell history --name NAME [--pane P] [--from OFF | --before OFF] [--count N]
 
 Common flags: --addr 127.0.0.1:7419 --token TOKEN (or HUGINN_TOKEN)
 
@@ -27,6 +29,10 @@ A shell is a tmux session on the sidecar's machine, not a coding-agent
 session. send types TEXT literally; keys sends tmux key names (Enter, C-c,
 Escape, Up). Pass --expect-gen with the gen from a screen read to refuse
 input when the screen has moved since.
+
+tap records a pane's output to a log on the sidecar's machine from now on,
+seeded with tmux's history; history pages that log by byte offset, or
+tmux's bounded history for an untapped pane.
 `)
 }
 
@@ -49,6 +55,11 @@ func runShell(args []string) int {
 	cursor := fs.String("cursor", "", "continue from a previous nextCursor")
 	cwd := fs.String("cwd", "", "working directory for the new shell")
 	command := fs.String("command", "", "program to run instead of the login shell")
+	off := fs.Bool("off", false, "tap: stop recording, keep the log")
+	forget := fs.Bool("forget", false, "tap: stop recording and delete the log")
+	from := fs.Int64("from", -1, "history: read forward from this offset")
+	before := fs.Int64("before", 0, "history: read the lines ending before this offset")
+	count := fs.Int("count", 0, "history: max lines (default 200, max 5000)")
 	fs.SetOutput(os.Stderr)
 	fs.Usage = shellUsage
 	if err := fs.Parse(rest); err != nil {
@@ -61,6 +72,7 @@ func runShell(args []string) int {
 	method, err := shellRequest(sub, params, fs.Args(), shellFlags{
 		Name: *name, Pane: *pane, Lines: *lines, Enter: *enter, ExpectGen: *expectGen,
 		Limit: *limit, Cursor: *cursor, CWD: *cwd, Command: *command,
+		Off: *off, Forget: *forget, From: *from, Before: *before, Count: *count,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "huginn shell: %v\n", err)
@@ -82,6 +94,9 @@ type shellFlags struct {
 	Limit        int
 	Cursor       string
 	CWD, Command string
+	Off, Forget  bool
+	From, Before int64
+	Count        int
 }
 
 // shellRequest fills params for one subcommand and names its RPC method.
@@ -160,6 +175,40 @@ func shellRequest(sub string, params map[string]any, positional []string, f shel
 			return "", err
 		}
 		return broker.MethodShellKill, nil
+	case "tap":
+		if err := needName(); err != nil {
+			return "", err
+		}
+		if f.Pane != "" {
+			params["pane"] = f.Pane
+		}
+		if f.Off {
+			params["off"] = true
+		}
+		if f.Forget {
+			params["forget"] = true
+		}
+		return broker.MethodShellTap, nil
+	case "history":
+		if err := needName(); err != nil {
+			return "", err
+		}
+		if f.Pane != "" {
+			params["pane"] = f.Pane
+		}
+		if f.From >= 0 && f.Before > 0 {
+			return "", fmt.Errorf("history: --from and --before are exclusive")
+		}
+		if f.From >= 0 {
+			params["from"] = f.From
+		}
+		if f.Before > 0 {
+			params["before"] = f.Before
+		}
+		if f.Count > 0 {
+			params["count"] = f.Count
+		}
+		return broker.MethodShellHist, nil
 	default:
 		return "", fmt.Errorf("unknown subcommand %q", sub)
 	}

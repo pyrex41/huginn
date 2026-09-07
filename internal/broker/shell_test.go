@@ -184,6 +184,73 @@ func TestShellScreenGenAndStaleSend(t *testing.T) {
 	}
 }
 
+// tapRunner answers the pane lookups tap and history make.
+type tapRunner struct{ scriptRunner }
+
+func (r *tapRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
+	joined := strings.Join(args, " ")
+	switch {
+	case args[0] == "display-message" && strings.Contains(joined, "#{pane_id}"):
+		return []byte("%2\n"), nil
+	case args[0] == "display-message" && strings.Contains(joined, "#{history_size}"):
+		return []byte("3:2000\n"), nil
+	case args[0] == "capture-pane":
+		return []byte("one\ntwo\nthree\n"), nil
+	}
+	return r.scriptRunner.Run(ctx, args...)
+}
+
+func TestShellTapAndHistory(t *testing.T) {
+	r := &tapRunner{}
+	shells := tmux.NewWithRunner(r)
+	shells.SetLogDir(t.TempDir())
+	srv, err := New(Config{Bind: "127.0.0.1:0", Token: "test-token", Shells: shells})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	res, rpcErr := shellCall(t, ts, "test-token", MethodShellHist, `{"name":"build","count":2}`)
+	if rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	var h tmux.History
+	_ = json.Unmarshal(res, &h)
+	if h.Source != "tmux" || len(h.Lines) != 2 || h.Lines[1].Text != "three" || h.HistoryLimit != 2000 {
+		t.Fatalf("untapped history=%+v", h)
+	}
+
+	res, rpcErr = shellCall(t, ts, "test-token", MethodShellTap, `{"name":"build"}`)
+	if rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	var tap tmux.Tap
+	_ = json.Unmarshal(res, &tap)
+	if tap.Pane != "%2" || tap.SeedLines != 3 || tap.TappedSince == "" {
+		t.Fatalf("tap=%+v", tap)
+	}
+	res, rpcErr = shellCall(t, ts, "test-token", MethodShellHist, `{"name":"build","from":0,"count":2}`)
+	if rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	_ = json.Unmarshal(res, &h)
+	if h.Source != "tap" || len(h.Lines) != 2 || h.Lines[0].Text != "one" || h.Next == 0 {
+		t.Fatalf("tapped history=%+v", h)
+	}
+	if _, rpcErr = shellCall(t, ts, "test-token", MethodShellHist, `{"name":"build","from":-5}`); rpcErr == nil || rpcErr.Code != CodeInvalidParams {
+		t.Fatalf("negative from: %+v", rpcErr)
+	}
+	if _, rpcErr = shellCall(t, ts, "test-token", MethodShellTap, `{"name":"build","forget":true}`); rpcErr != nil {
+		t.Fatal(rpcErr.Message)
+	}
+	res, _ = shellCall(t, ts, "test-token", MethodShellHist, `{"name":"build"}`)
+	_ = json.Unmarshal(res, &h)
+	if h.Source != "tmux" {
+		t.Fatalf("after forget: %+v", h)
+	}
+}
+
 func TestShellParamValidation(t *testing.T) {
 	ts := shellServer(t, &scriptRunner{})
 	for method, params := range map[string]string{
@@ -192,6 +259,8 @@ func TestShellParamValidation(t *testing.T) {
 		MethodShellKeys:   `{"name":"a"}`,
 		MethodShellNew:    `{"name":""}`,
 		MethodShellKill:   `{"name":"bad.name"}`,
+		MethodShellTap:    `{}`,
+		MethodShellHist:   `{"name":"a","before":-1}`,
 	} {
 		_, rpcErr := shellCall(t, ts, "test-token", method, params)
 		if rpcErr == nil || rpcErr.Code != CodeInvalidParams {

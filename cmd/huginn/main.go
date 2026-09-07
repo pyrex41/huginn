@@ -51,11 +51,11 @@ Usage:
   huginn serve [--bind 127.0.0.1:7419] [--token TOKEN] [--tailcat] [--tailcat-allow nodekey:…]
                [--zmqcat] [--zmqcat-listen ADDR] [--zmqcat-service NAME]
                [--zmqcat-workers N] [--zmqcat-no-presence]
-               [--shell] [--tmux-socket PATH]
+               [--shell] [--tmux-socket PATH] [--shell-log-dir DIR]
   huginn list [--addr 127.0.0.1:7419] [--token TOKEN] [--liveness live|resumable]
               [--runtime grok|codex|claude] [--cwd PREFIX] [--limit N] [--cursor C]
   huginn rpc --token TOKEN [--addr 127.0.0.1:7419] METHOD [JSON_PARAMS]
-  huginn shell list|screen|send|keys|new|kill …   (huginn shell --help)
+  huginn shell list|screen|send|keys|new|kill|tap|history …   (huginn shell --help)
 
 Environment:
   HUGINN_TOKEN   sidecar secret (required if --token is omitted)
@@ -90,6 +90,7 @@ type serveOpts struct {
 	PresenceEvery time.Duration
 	Shell         bool
 	TmuxSocket    string
+	ShellLogDir   string
 }
 
 type stringList []string
@@ -114,6 +115,7 @@ func parseServe(args []string) (serveOpts, error) {
 	presenceEvery := fs.Duration("zmqcat-presence-every", presence.DefaultInterval, "presence announcement interval")
 	shell := fs.Bool("shell", false, "register the tmux-backed shell verbs (shell/send is remote command execution)")
 	tmuxSocket := fs.String("tmux-socket", "", "tmux server socket (default: tmux's default for this user)")
+	shellLogDir := fs.String("shell-log-dir", "", "where shell/tap writes pane logs (default $XDG_STATE_HOME/huginn/shells)")
 	var allow stringList
 	fs.Var(&allow, "tailcat-allow", "repeatable nodekey:… allowlist (maps to tailcat serve --allow)")
 	fs.SetOutput(os.Stderr)
@@ -125,10 +127,13 @@ func parseServe(args []string) (serveOpts, error) {
 		Allow: append([]string(nil), allow...), ZMQCat: *zmqEnabled,
 		ZMQListen: *zmqListen, ZMQService: strings.TrimSpace(*zmqService),
 		ZMQWorkers: *zmqWorkers, NoPresence: *noPresence, PresenceEvery: *presenceEvery,
-		Shell: *shell, TmuxSocket: *tmuxSocket,
+		Shell: *shell, TmuxSocket: *tmuxSocket, ShellLogDir: *shellLogDir,
 	}
 	if opts.TmuxSocket != "" && !opts.Shell {
 		return serveOpts{}, fmt.Errorf("--tmux-socket requires --shell")
+	}
+	if opts.ShellLogDir != "" && !opts.Shell {
+		return serveOpts{}, fmt.Errorf("--shell-log-dir requires --shell")
 	}
 	if len(opts.Allow) > 0 && !opts.Tailcat {
 		return serveOpts{}, fmt.Errorf("--tailcat-allow requires --tailcat")
@@ -156,7 +161,7 @@ func runServe(args []string) int {
 			fmt.Fprintf(os.Stderr, "huginn: --shell: %v\n", err)
 			return 1
 		}
-		cfg.Shells = tmux.New(opts.TmuxSocket)
+		cfg.Shells = tmux.NewWithOptions(tmux.Options{Socket: opts.TmuxSocket, LogDir: opts.ShellLogDir})
 	}
 	srv, err := broker.New(cfg)
 	if err != nil {

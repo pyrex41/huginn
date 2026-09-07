@@ -49,6 +49,25 @@ func TestShellRequestShapes(t *testing.T) {
 		t.Fatalf("params=%v", params)
 	}
 
+	params = map[string]any{}
+	m, err = shellRequest("history", params, nil, shellFlags{Name: "build", From: -1, Before: 512, Count: 50})
+	if err != nil || m != broker.MethodShellHist {
+		t.Fatalf("%s %v", m, err)
+	}
+	if params["before"] != int64(512) || params["count"] != 50 {
+		t.Fatalf("params=%v", params)
+	}
+	if _, has := params["from"]; has {
+		t.Fatal("default --from must not be sent")
+	}
+	if _, err := shellRequest("history", map[string]any{}, nil, shellFlags{Name: "b", From: 1, Before: 2}); err == nil {
+		t.Fatal("--from with --before must fail")
+	}
+	params = map[string]any{}
+	if m, _ := shellRequest("tap", params, nil, shellFlags{Name: "b", Forget: true}); m != broker.MethodShellTap || params["forget"] != true {
+		t.Fatalf("tap: %s %v", m, params)
+	}
+
 	for _, bad := range [][]string{{"screen"}, {"kill"}, {"keys", "--name", "x"}, {"send", "--name", "x"}, {"bogus"}} {
 		params = map[string]any{}
 		if _, err := shellRequest(bad[0], params, nil, shellFlags{}); err == nil {
