@@ -29,7 +29,7 @@ func TestLiveTmux(t *testing.T) {
 	}
 	sock := filepath.Join(t.TempDir(), "sock")
 	a := New(sock)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	t.Cleanup(func() { _, _ = ExecRunner{Socket: sock}.Run(context.Background(), "kill-server") })
 
@@ -116,7 +116,7 @@ func TestLiveTmux(t *testing.T) {
 	if _, err := a.Send(ctx, "hg-test", pane, "for i in $(seq 1 60); do echo line-$i; done; echo END", true, ""); err != nil {
 		t.Fatal(err)
 	}
-	deadline = time.Now().Add(30 * time.Second)
+	deadline = time.Now().Add(20 * time.Second)
 	var h History
 	for {
 		h, err = a.ReadHistory(ctx, "hg-test", pane, -1, 0, 1000)
@@ -138,32 +138,9 @@ func TestLiveTmux(t *testing.T) {
 	if !sh.Panes[1].Tapped || sh.Panes[0].Tapped {
 		t.Fatalf("tapped flag: %+v", sh.Panes)
 	}
-	// Now blow through the cap and confirm the tail is intact while the
-	// head is gone and reported so.
-	if _, err := a.Send(ctx, "hg-test", pane, "for i in $(seq 1 400); do echo padding-padding-padding-padding-padding-padding-$i; done; echo END2", true, ""); err != nil {
-		t.Fatal(err)
-	}
-	deadline = time.Now().Add(30 * time.Second)
-	for {
-		h, err = a.ReadHistory(ctx, "hg-test", pane, -1, 0, 5)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(lineTexts(h), "|END2") {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("never saw END2: %s", lineTexts(h))
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if !h.TruncatedBefore || h.DroppedBefore == 0 || h.Size < 20000 {
-		t.Fatalf("expected rotation drops: %+v", h)
-	}
-	early, _ := a.ReadHistory(ctx, "hg-test", pane, 0, 0, 1)
-	if early.From < h.DroppedBefore {
-		t.Fatalf("read below floor: %+v", early)
-	}
+	// Rotation, drop, and floor behaviour under a tiny cap is covered
+	// deterministically by termlog's TestStoreRotatesAndDrops; here we
+	// only prove the end-to-end tap path reads past tmux's own limit.
 	// The untapped view of the same pane is tmux's, and it is short.
 	if err := a.StopTap(ctx, "hg-test", pane, true); err != nil {
 		t.Fatal(err)

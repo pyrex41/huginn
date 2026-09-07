@@ -168,7 +168,7 @@ shell/keys    {host, name, pane?, keys[], expect_gen?}       -> gen_before, gen_
 shell/new     {host, name, cwd?, command?, tap?}             -> row (+tap when asked)
 shell/kill    {host, name}                                   -> ok
 shell/tap     {host, name, pane?, off?, forget?}             -> pane, log, tapped_since, seed_lines, seed_truncated
-shell/history {host, name, pane?, from?, before?, count?}    -> source, lines[{offset,text}], from, next, size, truncated_before, dropped_before
+shell/history {host, name, pane?, from?, before?, count?}    -> source, lines[{offset,text}], from, next, size, truncated_before, dropped_before, recording
 ```
 
 A row names host, name, windows, panes (each with its tmux `%id`, index,
@@ -223,7 +223,18 @@ into offset-named segments, dropping the oldest once a pane passes
 `--shell-log-max` (default 256 MiB). Offsets are absolute across
 segments, so a cursor survives rotation until its segment is dropped;
 `dropped_before` in a history page is the floor. A shell grokbot opens
-with `shell/new {tap: true}` is recorded from its first byte.
+with `shell/new {tap: true}` has the pipe attached before its shell runs,
+so its history is complete bar any output produced during the tap call
+itself.
+
+A tap's success means a writer is holding the log: `shell/tap` attaches
+the pipe, then confirms the writer took its lock, and rolls the tap back
+with a typed error if it did not, so a tap never silently records nothing.
+`shell/history` reports `recording`; a tapped log whose writer has since
+died (pane closed, disk full) reads as `source: "tap"` with `recording:
+false`, a real tail that no longer grows. If tmux says a pane is piped but
+this process has no log for it (a restart with a different
+`--shell-log-dir`), history falls back to tmux with `tapped_elsewhere`.
 
 Logs live under `--shell-log-dir` (default `$XDG_STATE_HOME/huginn/shells`,
 mode 0600) on the machine that owns the pane. That is a deliberate
