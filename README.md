@@ -62,8 +62,8 @@ Wrapping those TUIs in a multiplexer treats an agent conversation as a
 screenful of cells and fights exclusive keyboard leases. Huginn talks to the
 agent, not the terminal emulator.
 
-shenmux remains the right tool for an arbitrary shell. It is the wrong layer
-for this.
+For an arbitrary shell, the layer is tmux, and huginn wraps it as a second,
+separate verb family (below). That family is not how huginn reaches agents.
 
 ## What a session is here
 
@@ -99,6 +99,10 @@ be looser.
 
 Nothing else is in the pipe. If grokbot can do the job without a piece, that
 piece does not live here.
+
+Beside the pipe, and typed apart from it, sits the **shell family**: six
+verbs over the serving user's tmux server, off by default. See
+[Shells](#shells).
 
 ## Broker contract
 
@@ -148,6 +152,57 @@ Adapters map:
 
 Lossy mappings stay lossy in the type, not hidden. A Claude channel attach
 does not pretend to be `session/load`.
+
+## Shells
+
+`huginn serve --shell` registers a second verb family. A **shell** is a tmux
+session on the host. It is not a session in the sense above: no runtime, no
+transcript, no capabilities, and no verb takes both kinds of name. The
+adapter is `internal/adapter/tmux`, named for what it wraps.
+
+```
+shell/list    {host?, limit?, cursor?}                       -> shells[], total, nextCursor
+shell/screen  {host, name, pane?, lines?}                    -> text, cursor{x,y}, gen
+shell/send    {host, name, pane?, text, enter?, expect_gen?} -> gen_before, gen_after
+shell/keys    {host, name, pane?, keys[], expect_gen?}       -> gen_before, gen_after
+shell/new     {host, name, cwd?, command?}                   -> row
+shell/kill    {host, name}                                   -> ok
+```
+
+A row names host, name, windows, panes (each with its tmux `%id`, index,
+cwd, and running command), cwd, attached, created. Rules:
+
+- Every call needs `HUGINN_TOKEN`, `shell/list` included. Nothing in this
+  family is looser than `session/list`.
+- Discovery runs `tmux list-sessions -F` with a format string the adapter
+  chose and parses fields. No server running is an empty list, not an error.
+  tmux missing from `PATH` fails `serve --shell` at startup.
+- `shell/screen` is `capture-pane` of one pane; `gen` is a digest of the
+  text. `shell/send` (`send-keys -l`, literal) and `shell/keys` (named keys:
+  `Enter`, `C-c`, `Escape`, `Up`) take an optional `expect_gen` and refuse
+  with a typed error (`-32012`, data carries `gen_before`) when the screen
+  moved since the caller read it. The result says what tmux accepted and
+  nothing more: `gen_after` is a second capture, not proof the program in
+  the pane saw a keystroke.
+- `shell/list` pages with the same keyset cursor, `total`, and `nextCursor`
+  as `session/list`.
+- `--tmux-socket` overrides the server; the default is tmux's default for
+  the serving user.
+- A caller must name a shell to reach it. Nothing in the session family
+  resolves to a shell, and a coding agent running inside a shell is a
+  process in a pane, not a session row.
+
+Surfaced wherever the session verbs are: broker JSON-RPC, `huginn shell
+list|screen|send|keys|new|kill`, the zmqcat worker (a hub reaches a
+machine's shells the same way it reaches its sessions), and `huginn-mcp`
+(`shell_list`, `shell_screen` always; `shell_send`, `shell_keys`,
+`shell_new`, `shell_kill` behind `--shell-write`). The Tailcat overlay
+forwards TCP to the loopback port and never looks at a method name, so it
+needed no change.
+
+`shell/send` is remote command execution as the serving user for anyone
+holding the token. That is the whole reason it is off by default; INSTALL.md
+says it again.
 
 ## Runtime rules
 
@@ -247,6 +302,8 @@ grokbot can:
 - inject a follow-up without sitting in the TUI
 - approve or deny a tool prompt when the adapter supports it
 - resume a disk session into a live adapter when asked
+- with `--shell`: list a machine's tmux shells, read a pane, type a command
+  or a key into a named shell, open or kill one
 
 grokbot cannot:
 
@@ -255,6 +312,9 @@ grokbot cannot:
 - silently auto-approve every tool (permission policy is explicit per
   attach, default deny-until-configured)
 - drive a session whose runtime is not installed on that host
+- read a shell beyond what tmux keeps in that pane's history, hold a lease
+  on a shell, attach to one, or treat an agent running in a shell as an
+  agent session
 
 ## Try the zmqcat mailbox transport
 
@@ -329,11 +389,16 @@ Run it beside `zmqcat serve` on the orchestration box:
 HUGINN_MCP_TOKEN=… huginn-mcp --bind 127.0.0.1:7420
 ```
 
-Two tools, both read-only:
+Two session tools, both read-only:
 
 - `machines_list` — who is on the bus, from presence
 - `sessions_list` — `session/list` against one machine, or **every** machine
   at once when `machine` is omitted
+
+Plus the shell tools for machines running `huginn serve --shell`:
+`shell_list` (fans out like `sessions_list`) and `shell_screen` always;
+`shell_send`, `shell_keys`, `shell_new`, `shell_kill` only with
+`--shell-write`, for the reason in the next section.
 
 Fan-out is per-machine tolerant: one unreachable host comes back as a row
 with an `error`, not a failed call, so a single dead laptop cannot blind the
@@ -372,7 +437,7 @@ sidecar. The HTTP surface keeps its own token check either way.
 
 | Repo | Owns | Huginn does with it |
 | --- | --- | --- |
-| **shenmux** | PTY, screen, exclusive input lease | Nothing. Different pipe. |
+| **shenmux** | PTY, screen, exclusive input lease | Nothing. The shell family wraps tmux directly and imports no terminal emulator; the only PTY is tmux's own. |
 | **command-center** / **shen-command-center** | Work engine, harness isolation, take/lease, policy | Huginn is not a control plane and does not schedule work. A later consumer may call huginn. That consumer is not this repo. |
 | **garmr** | Capability gateway | Authz for "may this principal prompt session X" can sit in front. Huginn does not reimplement it. |
 | Runtime CLIs | Claude / Codex / Grok | Huginn is a client of their protocols. |
@@ -384,8 +449,12 @@ product, it is in the wrong repository.
 
 Each names the owner instead. Checkable in a PR.
 
-**R1. No PTY, no terminal emulator, no keystroke injection.**
-Those are shenmux. A "fallback: type into tmux" adapter is a bug.
+**R1. No PTY, no terminal emulator, no keystroke injection into an agent.**
+Huginn never wraps Claude, Codex, or Grok in a PTY and never types into an
+agent TUI; a "fallback: type into the agent's tmux pane" adapter is a bug.
+The shell family is a separate pipe whose only PTY is tmux's own: a caller
+must name a shell to reach it, the session verbs never resolve to one, and
+an agent found running inside a shell is not thereby a session.
 
 **R2. No reverse-engineered Claude Remote Control.**
 Channels for live Claude TUIs. Official Agent SDK / print-mode only for
@@ -485,9 +554,10 @@ INSTALL.md           hub, then machines, then harnesses
 cmd/huginn/          sidecar + debug CLI
 cmd/huginn-mcp/      read-only MCP endpoint across the bus
 cmd/huginn-channel/  Claude channel plugin (injects into one live TUI)
-internal/broker/     the five verbs
+internal/broker/     the five verbs, plus the shell family when enabled
 internal/overlay/    optional Tailcat transport (not a verb)
 internal/adapter/    grok, codex, claude — native protocols only
+internal/adapter/tmux/  the shell family: tmux, and only tmux
 internal/discover/   live vs resumable probes
 internal/presence/   who is on the bus
 nix/                 packaging and the service modules

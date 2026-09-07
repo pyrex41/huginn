@@ -89,6 +89,10 @@ chmod 600 ~/.config/huginn/token
 
 `service` must be unique across the bus — it *is* the machine's address.
 
+To serve the machine's tmux shells as well, pass `--shell` (and
+`--tmux-socket PATH` if the server is not on tmux's default socket). This is
+off by default; read the trust note below before turning it on.
+
 The machine also needs a local socket onto the hub's bus. Put the `tc…`
 token from step 1 in a file and join:
 
@@ -183,3 +187,12 @@ Read this before enabling it anywhere shared.
   per-principal authorization.
 - **`--bind` defaults to loopback.** Put an overlay or a TLS terminator in
   front before exposing the MCP endpoint further.
+- **`--shell` is remote command execution.** With it, `shell/send` and
+  `shell/keys` type into the serving user's tmux panes, and `shell/new`
+  runs any command, all as that user, for anyone who holds `HUGINN_TOKEN`
+  (or, over zmqcat, anyone who can reach the socket). `shell/screen` reads
+  whatever is on those screens. Enable it only where the token holders are
+  exactly the people who may already log in as that user. On the hub,
+  `huginn-mcp --shell-write` extends the same reach to every harness with
+  the MCP token; without it the endpoint only lists shells and reads
+  screens.
