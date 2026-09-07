@@ -26,7 +26,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, `huginn-mcp — read-only MCP view of huginn sessions across a zmqcat bus
 
 Usage:
-  huginn-mcp [--bind 127.0.0.1:7420] [--zmqcat-listen ADDR] [--token TOKEN]
+  huginn-mcp [--bind 127.0.0.1:7420] [--zmqcat-listen ADDR] [--token TOKEN] [--shell-write]
 
 Flags:
   --bind ADDR         HTTP listen address (default 127.0.0.1:7420)
@@ -34,10 +34,17 @@ Flags:
   --token TOKEN       bearer token clients must present (or HUGINN_MCP_TOKEN)
   --timeout DUR       per-machine request timeout (default 30s)
   --stale-after DUR   drop a machine after this long without an announcement
+  --shell-write       also expose shell_send, shell_keys, shell_new, shell_kill
 
-Only session/list is exposed. prompt, interrupt, and permission stay off
-this surface until per-principal authorization exists: anything that can
-reach it would otherwise be able to drive every session on every machine.
+Session verbs: only session/list is exposed. prompt, interrupt, and
+permission stay off this surface until per-principal authorization exists:
+anything that can reach it would otherwise be able to drive every session
+on every machine.
+
+Shell verbs: shell_list and shell_screen are always on for machines that
+run huginn serve --shell. The four write tools are remote command execution
+as each machine's user for anyone holding this token; --shell-write turns
+them on, and off is the default for the same reason prompt is off.
 `)
 }
 
@@ -49,6 +56,7 @@ func main() {
 	token := fs.String("token", os.Getenv("HUGINN_MCP_TOKEN"), "bearer token (or HUGINN_MCP_TOKEN)")
 	timeout := fs.Duration("timeout", 30*time.Second, "per-machine request timeout")
 	staleAfter := fs.Duration("stale-after", presence.DefaultStaleAfter, "drop a machine after this long unheard")
+	shellWrite := fs.Bool("shell-write", false, "expose shell_send/keys/new/kill (remote command execution)")
 	fs.SetOutput(os.Stderr)
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
@@ -68,9 +76,10 @@ func main() {
 		os.Exit(1)
 	}
 	srv := &server{
-		bus:     &busClient{listen: *listen},
-		roster:  rosterAdapter{roster},
-		timeout: *timeout,
+		bus:        &busClient{listen: *listen},
+		roster:     rosterAdapter{roster},
+		timeout:    *timeout,
+		shellWrite: *shellWrite,
 	}
 
 	mux := http.NewServeMux()
@@ -83,7 +92,7 @@ func main() {
 		defer cancel()
 		_ = httpSrv.Shutdown(sd)
 	}()
-	fmt.Fprintf(os.Stderr, "huginn-mcp: listening on %s bus=%s\n", *bind, displayListen(*listen))
+	fmt.Fprintf(os.Stderr, "huginn-mcp: listening on %s bus=%s shell_write=%v\n", *bind, displayListen(*listen), *shellWrite)
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		fmt.Fprintf(os.Stderr, "huginn-mcp: %v\n", err)
 		os.Exit(1)
