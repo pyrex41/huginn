@@ -93,8 +93,9 @@ To serve the machine's tmux shells as well, pass `--shell` (and
 `--tmux-socket PATH` if the server is not on tmux's default socket). This is
 off by default; read the trust note below before turning it on.
 `shell/tap` writes pane logs under `--shell-log-dir`, default
-`$XDG_STATE_HOME/huginn/shells` or `~/.local/state/huginn/shells`; they
-grow until a caller passes `forget`.
+`$XDG_STATE_HOME/huginn/shells` or `~/.local/state/huginn/shells`, and
+rotates them under `--shell-log-max` bytes per pane (default 256 MiB); a
+caller passing `forget` removes one outright.
 
 The machine also needs a local socket onto the hub's bus. Put the `tc…`
 token from step 1 in a file and join:
@@ -201,5 +202,6 @@ Read this before enabling it anywhere shared.
   screens and history.
 - **A tapped pane is recorded to disk.** `shell/tap` keeps everything that
   pane prints, passwords echoed by a misbehaving program included, in a
-  0600 file under your state directory on that machine. It stays until
-  `shell/tap` with `forget`. Do not tap a pane you would not `script`.
+  0600 file under your state directory on that machine, up to
+  `--shell-log-max` per pane. It stays until `shell/tap` with `forget`.
+  Do not tap a pane you would not `script`.

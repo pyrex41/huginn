@@ -165,14 +165,14 @@ shell/list    {host?, limit?, cursor?}                       -> shells[], total,
 shell/screen  {host, name, pane?, lines?}                    -> text, cursor{x,y}, gen
 shell/send    {host, name, pane?, text, enter?, expect_gen?} -> gen_before, gen_after
 shell/keys    {host, name, pane?, keys[], expect_gen?}       -> gen_before, gen_after
-shell/new     {host, name, cwd?, command?}                   -> row
+shell/new     {host, name, cwd?, command?, tap?}             -> row (+tap when asked)
 shell/kill    {host, name}                                   -> ok
 shell/tap     {host, name, pane?, off?, forget?}             -> pane, log, tapped_since, seed_lines, seed_truncated
-shell/history {host, name, pane?, from?, before?, count?}    -> source, lines[{offset,text}], from, next, size, truncated_before
+shell/history {host, name, pane?, from?, before?, count?}    -> source, lines[{offset,text}], from, next, size, truncated_before, dropped_before
 ```
 
 A row names host, name, windows, panes (each with its tmux `%id`, index,
-cwd, and running command), cwd, attached, created. Rules:
+cwd, running command, and whether it is tapped), cwd, attached, created. Rules:
 
 - Every call needs `HUGINN_TOKEN`, `shell/list` included. Nothing in this
   family is looser than `session/list`.
@@ -216,6 +216,14 @@ An untapped pane still answers `shell/history`, from tmux's own bounded
 history, with `source: "tmux"`, `history_limit`, and `truncated_before`
 set when tmux has already dropped lines. Raise `history-limit` in the
 machine's tmux config to widen that window without tapping.
+
+The writer is huginn itself: `pipe-pane` runs `huginn shell-writer` for
+each tapped pane, so every byte is counted exactly and the log rotates
+into offset-named segments, dropping the oldest once a pane passes
+`--shell-log-max` (default 256 MiB). Offsets are absolute across
+segments, so a cursor survives rotation until its segment is dropped;
+`dropped_before` in a history page is the floor. A shell grokbot opens
+with `shell/new {tap: true}` is recorded from its first byte.
 
 Logs live under `--shell-log-dir` (default `$XDG_STATE_HOME/huginn/shells`,
 mode 0600) on the machine that owns the pane. That is a deliberate
@@ -346,9 +354,9 @@ grokbot cannot:
 - silently auto-approve every tool (permission policy is explicit per
   attach, default deny-until-configured)
 - drive a session whose runtime is not installed on that host
-- read a shell's past from before it was tapped beyond what tmux kept, hold
-  a lease on a shell, attach to one, or treat an agent running in a shell
-  as an agent session
+- read a shell's past from before it was tapped beyond what tmux kept, or
+  past the per-pane cap once rotation dropped it; hold a lease on a shell;
+  attach to one; or treat an agent running in a shell as an agent session
 
 ## Try the zmqcat mailbox transport
 
