@@ -229,3 +229,43 @@ func firstParam(params string, def int) int {
 	}
 	return p[0]
 }
+
+// PageLines selects at most count whole lines from an already-rendered
+// slice, the way a bounded snapshot (tmux's own history) is paged: before
+// > 0 keeps the lines ending before that offset, from >= 0 keeps the lines
+// at or after it, and otherwise the tail is returned. size is the offset
+// one past the last line. It returns the page and the offset a forward
+// read would continue from. Unlike Store.Read these offsets are positions
+// in one snapshot, not durable cursors.
+func PageLines(lines []Line, from, before, size int64, count int) (page []Line, next int64) {
+	if count <= 0 {
+		count = 200
+	}
+	switch {
+	case before > 0:
+		end := len(lines)
+		for end > 0 && lines[end-1].Offset >= before {
+			end--
+		}
+		lines = lines[:end]
+		if len(lines) > count {
+			lines = lines[len(lines)-count:]
+		}
+		return lines, before
+	case from >= 0:
+		start := 0
+		for start < len(lines) && lines[start].Offset < from {
+			start++
+		}
+		lines = lines[start:]
+		if len(lines) > count {
+			return lines[:count], lines[count].Offset
+		}
+		return lines, size
+	default:
+		if len(lines) > count {
+			lines = lines[len(lines)-count:]
+		}
+		return lines, size
+	}
+}

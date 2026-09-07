@@ -33,6 +33,11 @@ type Writer struct {
 	cur          *os.File
 	curStart     int64
 	curSize      int64
+	// segs is the writer's own view of the segments on disk, oldest first,
+	// with the current one last. The writer is the sole appender (it holds
+	// the lock), so it maintains this in memory rather than re-globbing and
+	// re-stat'ing on every rotation.
+	segs []segment
 }
 
 // ErrWriterAlive is Seed refusing to destroy a log a writer still holds.
@@ -129,10 +134,11 @@ func (s *Store) NewWriter(shell, pane string, maxBytes int64) (*Writer, error) {
 		_ = lock.Close()
 		return nil, err
 	}
-	last := segment{start: 0}
-	if len(segs) > 0 {
-		last = segs[len(segs)-1]
+	if len(segs) == 0 {
+		segs = []segment{{path: segmentPath(p, 0), start: 0}}
 	}
+	w.segs = segs
+	last := segs[len(segs)-1]
 	if err := w.open(last.start, last.size); err != nil {
 		_ = lock.Close()
 		return nil, err
@@ -174,6 +180,9 @@ func (w *Writer) Write(p []byte) (int, error) {
 func (w *Writer) append(p []byte) error {
 	n, err := w.cur.Write(p)
 	w.curSize += int64(n)
+	if len(w.segs) > 0 {
+		w.segs[len(w.segs)-1].size = w.curSize
+	}
 	return err
 }
 
@@ -184,32 +193,30 @@ func (w *Writer) rotate() error {
 	if err := w.cur.Close(); err != nil {
 		return err
 	}
-	if err := w.open(w.curStart+w.curSize, 0); err != nil {
+	start := w.curStart + w.curSize
+	if err := w.open(start, 0); err != nil {
 		return err
 	}
+	w.segs = append(w.segs, segment{path: segmentPath(w.prefix, start), start: start})
 	return w.enforceCap()
 }
 
 func (w *Writer) enforceCap() error {
-	segs, err := segments(w.prefix)
-	if err != nil {
-		return err
-	}
 	var total int64
-	for _, sg := range segs {
+	for _, sg := range w.segs {
 		total += sg.size
 	}
 	// The current segment was just opened empty and will grow to
 	// segmentBytes, so leave it that headroom: on disk never exceeds the cap.
 	dropped := int64(-1)
-	for len(segs) > 1 && total > w.maxBytes-w.segmentBytes {
-		oldest := segs[0]
+	for len(w.segs) > 1 && total > w.maxBytes-w.segmentBytes {
+		oldest := w.segs[0]
 		if err := os.Remove(oldest.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 		total -= oldest.size
-		segs = segs[1:]
-		dropped = segs[0].start
+		w.segs = w.segs[1:]
+		dropped = w.segs[0].start
 	}
 	if dropped < 0 {
 		return nil

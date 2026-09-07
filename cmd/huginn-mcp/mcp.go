@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +31,7 @@ type rpcResponse struct {
 type rpcError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+	Data    any    `json:"data,omitempty"`
 }
 
 // server is stateless: every tools/call is independent, so nothing is kept
@@ -181,22 +181,28 @@ type machineResult struct {
 	Error      string          `json:"error,omitempty"`
 }
 
-func (s *server) sessionsList(ctx context.Context, args map[string]any) map[string]any {
-	targets := []string{}
-	if m, ok := args["machine"].(string); ok && strings.TrimSpace(m) != "" {
-		if !s.roster.Has(m) {
-			return toolError(fmt.Sprintf("machine %q is not on the bus; call machines_list", m))
-		}
-		targets = append(targets, m)
-	} else {
-		for _, e := range s.roster.Machines() {
-			targets = append(targets, e.Service)
-		}
+// fanOut runs fn against every target concurrently and returns the results
+// in target order. One slow or unreachable machine never blocks or fails
+// the others: fn is expected to fold an error into its own result row.
+func fanOut[T any](targets []string, fn func(target string) T) []T {
+	out := make([]T, len(targets))
+	var wg sync.WaitGroup
+	for i, target := range targets {
+		wg.Add(1)
+		go func(i int, target string) {
+			defer wg.Done()
+			out[i] = fn(target)
+		}(i, target)
 	}
-	if len(targets) == 0 {
-		return toolError("no machines are announcing themselves on this bus")
-	}
+	wg.Wait()
+	return out
+}
 
+func (s *server) sessionsList(ctx context.Context, args map[string]any) map[string]any {
+	targets, errRes := s.targets(args)
+	if errRes != nil {
+		return errRes
+	}
 	rpcParams := map[string]any{}
 	for _, k := range []string{"liveness", "runtime", "cwd", "cursor"} {
 		if v, ok := args[k].(string); ok && v != "" {
@@ -206,46 +212,29 @@ func (s *server) sessionsList(ctx context.Context, args map[string]any) map[stri
 	if v, ok := args["limit"].(float64); ok && v > 0 {
 		rpcParams["limit"] = int(v)
 	}
-
-	out := make([]machineResult, len(targets))
-	var wg sync.WaitGroup
-	for i, target := range targets {
-		wg.Add(1)
-		go func(i int, target string) {
-			defer wg.Done()
-			out[i] = s.queryOne(ctx, target, rpcParams)
-		}(i, target)
-	}
-	wg.Wait()
+	out := fanOut(targets, func(target string) machineResult {
+		return s.queryOne(ctx, target, rpcParams)
+	})
 	return toolResult(map[string]any{"machines": out})
 }
 
 func (s *server) queryOne(ctx context.Context, target string, params map[string]any) machineResult {
 	res := machineResult{Machine: target}
-	raw, err := s.bus.rpc(ctx, target, "session/list", params, s.timeout)
+	raw, err := s.callMachine(ctx, target, "session/list", params)
 	if err != nil {
 		res.Error = err.Error()
 		return res
 	}
-	var parsed struct {
-		Result struct {
-			Sessions   json.RawMessage `json:"sessions"`
-			Total      int             `json:"total"`
-			NextCursor string          `json:"nextCursor"`
-		} `json:"result"`
-		Error *rpcError `json:"error"`
+	var r struct {
+		Sessions   json.RawMessage `json:"sessions"`
+		Total      int             `json:"total"`
+		NextCursor string          `json:"nextCursor"`
 	}
-	if err := json.Unmarshal(raw, &parsed); err != nil {
+	if err := json.Unmarshal(raw, &r); err != nil {
 		res.Error = "unparseable reply from " + target
 		return res
 	}
-	if parsed.Error != nil {
-		res.Error = parsed.Error.Message
-		return res
-	}
-	res.Sessions = parsed.Result.Sessions
-	res.Total = parsed.Result.Total
-	res.NextCursor = parsed.Result.NextCursor
+	res.Sessions, res.Total, res.NextCursor = r.Sessions, r.Total, r.NextCursor
 	return res
 }
 

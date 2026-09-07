@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 )
 
 // Shell tools. shell_list and shell_screen read; the other four type into,
@@ -189,31 +188,25 @@ func (s *server) shellList(ctx context.Context, args map[string]any) map[string]
 	if v, ok := args["limit"].(float64); ok && v > 0 {
 		params["limit"] = int(v)
 	}
-	out := make([]shellMachineResult, len(targets))
-	var wg sync.WaitGroup
-	for i, target := range targets {
-		wg.Add(1)
-		go func(i int, target string) {
-			defer wg.Done()
-			out[i] = shellMachineResult{Machine: target}
-			raw, err := s.callMachine(ctx, target, "shell/list", params)
-			if err != nil {
-				out[i].Error = err.Error()
-				return
-			}
-			var parsed struct {
-				Shells     json.RawMessage `json:"shells"`
-				Total      int             `json:"total"`
-				NextCursor string          `json:"nextCursor"`
-			}
-			if err := json.Unmarshal(raw, &parsed); err != nil {
-				out[i].Error = "unparseable reply from " + target
-				return
-			}
-			out[i].Shells, out[i].Total, out[i].NextCursor = parsed.Shells, parsed.Total, parsed.NextCursor
-		}(i, target)
-	}
-	wg.Wait()
+	out := fanOut(targets, func(target string) shellMachineResult {
+		res := shellMachineResult{Machine: target}
+		raw, err := s.callMachine(ctx, target, "shell/list", params)
+		if err != nil {
+			res.Error = err.Error()
+			return res
+		}
+		var r struct {
+			Shells     json.RawMessage `json:"shells"`
+			Total      int             `json:"total"`
+			NextCursor string          `json:"nextCursor"`
+		}
+		if err := json.Unmarshal(raw, &r); err != nil {
+			res.Error = "unparseable reply from " + target
+			return res
+		}
+		res.Shells, res.Total, res.NextCursor = r.Shells, r.Total, r.NextCursor
+		return res
+	})
 	return toolResult(map[string]any{"machines": out})
 }
 
@@ -254,21 +247,20 @@ func (s *server) callMachine(ctx context.Context, target, method string, params 
 	}
 	var parsed struct {
 		Result json.RawMessage `json:"result"`
-		Error  *struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-			Data    any    `json:"data"`
-		} `json:"error"`
+		Error  *rpcError       `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return nil, fmt.Errorf("unparseable reply from %s", target)
 	}
 	if parsed.Error != nil {
+		// Keep the message verbatim so callers see the broker's own text;
+		// append error data (e.g. a screen-moved gen_before) only when the
+		// broker attached some.
 		if parsed.Error.Data != nil {
 			d, _ := json.Marshal(parsed.Error.Data)
-			return nil, fmt.Errorf("%s (code %d, data %s)", parsed.Error.Message, parsed.Error.Code, d)
+			return nil, fmt.Errorf("%s (data %s)", parsed.Error.Message, d)
 		}
-		return nil, fmt.Errorf("%s (code %d)", parsed.Error.Message, parsed.Error.Code)
+		return nil, fmt.Errorf("%s", parsed.Error.Message)
 	}
 	return parsed.Result, nil
 }

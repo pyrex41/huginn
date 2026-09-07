@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pyrex41/huginn/internal/termlog"
 )
@@ -42,13 +43,17 @@ func (r *histRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
 		return []byte("build:0:0:%4:1:" + p + ":bash:/b\n"), nil
 	case args[0] == "display-message" && strings.Contains(joined, "#{pane_id}"):
 		return []byte("%4\n"), nil
+	case args[0] == "display-message" && strings.Contains(joined, "#{history_size}"):
+		pipe := "0"
+		if r.piped {
+			pipe = "1"
+		}
+		return []byte(strconv.Itoa(r.histSize) + ":" + strconv.Itoa(r.histLimit) + ":" + pipe + "\n"), nil
 	case args[0] == "display-message" && strings.Contains(joined, "#{pane_pipe}"):
 		if r.piped {
 			return []byte("1\n"), nil
 		}
 		return []byte("0\n"), nil
-	case args[0] == "display-message" && strings.Contains(joined, "#{history_size}"):
-		return []byte(strconv.Itoa(r.histSize) + ":" + strconv.Itoa(r.histLimit) + "\n"), nil
 	case args[0] == "capture-pane":
 		return []byte(r.history), nil
 	case args[0] == "pipe-pane":
@@ -166,11 +171,24 @@ func TestTapSeedsAndPipes(t *testing.T) {
 		t.Fatalf("tap=%+v", tap)
 	}
 	r.feed(t, "$ make\r\nbuilding\rbuilt   \x1b[K\r\n")
-	h, err := a.ReadHistory(context.Background(), "build", "%4", -1, 0, 10)
-	if err != nil {
-		t.Fatal(err)
+	// The writer drains the pipe on its own goroutine; poll until the fed
+	// output lands rather than racing it.
+	var h History
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		h, err = a.ReadHistory(context.Background(), "build", "%4", -1, 0, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if lineTexts(h) == "old|$ make|built" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("h=%+v", h)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	if h.Source != "tap" || lineTexts(h) != "old|$ make|built" || h.TruncatedBefore || h.TappedSince == "" || !h.Recording {
+	if h.Source != "tap" || h.TruncatedBefore || h.TappedSince == "" || !h.Recording {
 		t.Fatalf("h=%+v", h)
 	}
 	if err := a.StopTap(context.Background(), "build", "", true); err != nil {

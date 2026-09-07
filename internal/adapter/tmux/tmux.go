@@ -729,7 +729,7 @@ func (a *Adapter) StartTap(ctx context.Context, name, pane string) (Tap, error) 
 	// Wait for the old writer, if any, to release before Seed deletes the
 	// segments it holds. A first tap has none and this returns at once.
 	a.logs.WaitReleased(name, paneID, 2*time.Second)
-	seed, truncated, _, err := a.tmuxHistory(ctx, paneID)
+	seed, truncated, _, _, err := a.tmuxHistory(ctx, paneID)
 	if err != nil {
 		return Tap{}, err
 	}
@@ -814,91 +814,55 @@ func (a *Adapter) ReadHistory(ctx context.Context, name, pane string, from, befo
 			return History{}, err
 		}
 	}
-	text, truncated, limit, err := a.tmuxHistory(ctx, target)
+	text, truncated, piped, limit, err := a.tmuxHistory(ctx, target)
 	if err != nil {
 		return History{}, err
 	}
 	// tmux says this pane is piped but we have no log for it: another
 	// process, or this one before a log-dir change, owns the recording.
-	tappedElsewhere := a.logs != nil && a.paneIsPiped(ctx, name, paneID)
+	tappedElsewhere := a.logs != nil && piped
 	lines := termlog.Render([]byte(text), 0)
 	if count <= 0 {
 		count = 200
 	}
 	h := History{Source: "tmux", Pane: paneID, Lines: []termlog.Line{}, Size: int64(len(text)), TruncatedBefore: truncated, HistoryLimit: limit, TappedElsewhere: tappedElsewhere}
-	switch {
-	case before > 0:
-		var kept []termlog.Line
-		for _, l := range lines {
-			if l.Offset < before {
-				kept = append(kept, l)
-			}
-		}
-		if len(kept) > count {
-			kept = kept[len(kept)-count:]
-		}
-		lines = kept
-		h.Next = before
-	case from >= 0:
-		var kept []termlog.Line
-		for _, l := range lines {
-			if l.Offset >= from {
-				kept = append(kept, l)
-			}
-		}
-		if len(kept) > count {
-			h.Next = kept[count].Offset
-			kept = kept[:count]
-		} else {
-			h.Next = h.Size
-		}
-		lines = kept
-	default:
-		if len(lines) > count {
-			lines = lines[len(lines)-count:]
-		}
-		h.Next = h.Size
-	}
-	if lines != nil {
-		h.Lines = lines
-	}
-	if len(h.Lines) > 0 {
-		h.From = h.Lines[0].Offset
+	page, next := termlog.PageLines(lines, from, before, h.Size, count)
+	h.Next = next
+	if len(page) > 0 {
+		h.Lines = page
+		h.From = page[0].Offset
 	}
 	return h, nil
 }
 
 // tmuxHistory is capture-pane over the whole history plus whether tmux
 // was already at its limit (older lines gone) and what that limit is.
-func (a *Adapter) tmuxHistory(ctx context.Context, target string) (text string, truncated bool, limit int, err error) {
+func (a *Adapter) tmuxHistory(ctx context.Context, target string) (text string, truncated, piped bool, limit int, err error) {
 	out, err := a.runner.Run(ctx, "capture-pane", "-p", "-J", "-t", target, "-S", "-", "-E", "-")
 	if err != nil {
-		return "", false, 0, mapErr(err)
+		return "", false, false, 0, mapErr(err)
 	}
 	text = strings.TrimRight(string(out), " \n")
 	if text != "" {
 		text += "\n"
 	}
-	hs, err := a.runner.Run(ctx, "display-message", "-p", "-t", target, "-F", "#{history_size}:#{history_limit}")
+	// One display-message carries everything the history path needs about
+	// the pane: how much scrollback tmux kept, its limit, and whether the
+	// pane is being piped elsewhere.
+	hs, err := a.runner.Run(ctx, "display-message", "-p", "-t", target, "-F", "#{history_size}:#{history_limit}:#{pane_pipe}")
 	if err != nil {
-		return text, false, 0, nil
+		return text, false, false, 0, nil
 	}
 	f := strings.Split(strings.TrimSpace(string(hs)), sep)
-	if len(f) == 2 {
+	if len(f) >= 2 {
 		size, _ := strconv.Atoi(f[0])
 		limit, _ = strconv.Atoi(f[1])
 		truncated = limit > 0 && size >= limit
 	}
-	return text, truncated, limit, nil
-}
-
-// paneIsPiped reports tmux's pane_pipe flag for a pane id.
-func (a *Adapter) paneIsPiped(ctx context.Context, name, paneID string) bool {
-	out, err := a.runner.Run(ctx, "display-message", "-p", "-t", paneID, "-F", "#{pane_pipe}")
-	if err != nil {
-		return false
+	if len(f) >= 3 {
+		piped = f[2] == "1"
 	}
-	return strings.TrimSpace(string(out)) == "1"
+	return text, truncated, piped, limit, nil
 }
 
 // paneTarget resolves name + pane to a tmux target and the pane's %id,

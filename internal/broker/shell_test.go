@@ -209,13 +209,17 @@ func (r *tapRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
 	switch {
 	case args[0] == "display-message" && strings.Contains(joined, "#{pane_id}"):
 		return []byte("%2\n"), nil
+	case args[0] == "display-message" && strings.Contains(joined, "#{history_size}"):
+		pipe := "0"
+		if r.pipeW != nil {
+			pipe = "1"
+		}
+		return []byte("3:2000:" + pipe + "\n"), nil
 	case args[0] == "display-message" && strings.Contains(joined, "#{pane_pipe}"):
 		if r.pipeW != nil {
 			return []byte("1\n"), nil
 		}
 		return []byte("0\n"), nil
-	case args[0] == "display-message" && strings.Contains(joined, "#{history_size}"):
-		return []byte("3:2000\n"), nil
 	case args[0] == "capture-pane":
 		return []byte("one\ntwo\nthree\n"), nil
 	case args[0] == "pipe-pane":

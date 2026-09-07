@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"sort"
 
 	"github.com/pyrex41/huginn/internal/adapter/tmux"
 )
@@ -44,14 +43,15 @@ func ShellMethods() []string {
 	return []string{MethodShellList, MethodShellScreen, MethodShellSend, MethodShellKeys, MethodShellNew, MethodShellKill, MethodShellTap, MethodShellHist}
 }
 
-func isShellMethod(m string) bool {
-	for _, s := range ShellMethods() {
-		if s == m {
-			return true
-		}
+var shellMethodSet = func() map[string]bool {
+	m := map[string]bool{}
+	for _, v := range ShellMethods() {
+		m[v] = true
 	}
-	return false
-}
+	return m
+}()
+
+func isShellMethod(m string) bool { return shellMethodSet[m] }
 
 type shellListParams struct {
 	Host   string `json:"host,omitempty"`
@@ -159,6 +159,20 @@ func (s *Server) hostMatches(host string) bool {
 	return host == "" || host == s.shells.Host()
 }
 
+// shellGuard is the preamble every named-shell verb shares: a name is
+// required, and a request naming another machine's host gets that
+// machine's answer for a missing shell, not this one's. It returns the
+// response to send and false when the request should not proceed.
+func (s *Server) shellGuard(id json.RawMessage, host, name string) (response, bool) {
+	if name == "" {
+		return errorResponse(id, CodeInvalidParams, "name required"), false
+	}
+	if !s.hostMatches(host) {
+		return shellErr(id, tmux.ErrNotFound, nil), false
+	}
+	return response{}, true
+}
+
 func (s *Server) shellList(ctx context.Context, req request) response {
 	var p shellListParams
 	if len(req.Params) > 0 {
@@ -177,7 +191,7 @@ func (s *Server) shellList(ctx context.Context, req request) response {
 			return errorResponse(req.ID, CodeInternalError, err.Error())
 		}
 	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
+	// List already returns rows sorted by name.
 	page := make([]tmux.Shell, 0, len(rows))
 	for _, r := range rows {
 		if after != "" && r.Name <= after {
@@ -202,11 +216,11 @@ func (s *Server) shellList(ctx context.Context, req request) response {
 
 func (s *Server) shellScreen(ctx context.Context, req request) response {
 	var p shellScreenParams
-	if err := decodeParams(req.Params, &p); err != nil || p.Name == "" {
-		return errorResponse(req.ID, CodeInvalidParams, "name required")
+	if err := decodeParams(req.Params, &p); err != nil {
+		return errorResponse(req.ID, CodeInvalidParams, "invalid params")
 	}
-	if !s.hostMatches(p.Host) {
-		return shellErr(req.ID, tmux.ErrNotFound, nil)
+	if resp, ok := s.shellGuard(req.ID, p.Host, p.Name); !ok {
+		return resp
 	}
 	scr, err := s.shells.Screen(ctx, p.Name, p.Pane, p.Lines)
 	if err != nil {
@@ -217,11 +231,11 @@ func (s *Server) shellScreen(ctx context.Context, req request) response {
 
 func (s *Server) shellSend(ctx context.Context, req request) response {
 	var p shellSendParams
-	if err := decodeParams(req.Params, &p); err != nil || p.Name == "" {
-		return errorResponse(req.ID, CodeInvalidParams, "name required")
+	if err := decodeParams(req.Params, &p); err != nil {
+		return errorResponse(req.ID, CodeInvalidParams, "invalid params")
 	}
-	if !s.hostMatches(p.Host) {
-		return shellErr(req.ID, tmux.ErrNotFound, nil)
+	if resp, ok := s.shellGuard(req.ID, p.Host, p.Name); !ok {
+		return resp
 	}
 	sent, err := s.shells.Send(ctx, p.Name, p.Pane, p.Text, p.Enter, p.ExpectGen)
 	if err != nil {
@@ -232,14 +246,14 @@ func (s *Server) shellSend(ctx context.Context, req request) response {
 
 func (s *Server) shellKeys(ctx context.Context, req request) response {
 	var p shellKeysParams
-	if err := decodeParams(req.Params, &p); err != nil || p.Name == "" {
-		return errorResponse(req.ID, CodeInvalidParams, "name required")
+	if err := decodeParams(req.Params, &p); err != nil {
+		return errorResponse(req.ID, CodeInvalidParams, "invalid params")
+	}
+	if resp, ok := s.shellGuard(req.ID, p.Host, p.Name); !ok {
+		return resp
 	}
 	if len(p.Keys) == 0 {
 		return errorResponse(req.ID, CodeInvalidParams, "keys required")
-	}
-	if !s.hostMatches(p.Host) {
-		return shellErr(req.ID, tmux.ErrNotFound, nil)
 	}
 	sent, err := s.shells.Keys(ctx, p.Name, p.Pane, p.Keys, p.ExpectGen)
 	if err != nil {
@@ -265,11 +279,11 @@ func (s *Server) shellNew(ctx context.Context, req request) response {
 
 func (s *Server) shellKill(ctx context.Context, req request) response {
 	var p shellKillParams
-	if err := decodeParams(req.Params, &p); err != nil || p.Name == "" {
-		return errorResponse(req.ID, CodeInvalidParams, "name required")
+	if err := decodeParams(req.Params, &p); err != nil {
+		return errorResponse(req.ID, CodeInvalidParams, "invalid params")
 	}
-	if !s.hostMatches(p.Host) {
-		return shellErr(req.ID, tmux.ErrNotFound, nil)
+	if resp, ok := s.shellGuard(req.ID, p.Host, p.Name); !ok {
+		return resp
 	}
 	if err := s.shells.Kill(ctx, p.Name); err != nil {
 		return shellErr(req.ID, err, nil)
@@ -279,11 +293,11 @@ func (s *Server) shellKill(ctx context.Context, req request) response {
 
 func (s *Server) shellTap(ctx context.Context, req request) response {
 	var p shellTapParams
-	if err := decodeParams(req.Params, &p); err != nil || p.Name == "" {
-		return errorResponse(req.ID, CodeInvalidParams, "name required")
+	if err := decodeParams(req.Params, &p); err != nil {
+		return errorResponse(req.ID, CodeInvalidParams, "invalid params")
 	}
-	if !s.hostMatches(p.Host) {
-		return shellErr(req.ID, tmux.ErrNotFound, nil)
+	if resp, ok := s.shellGuard(req.ID, p.Host, p.Name); !ok {
+		return resp
 	}
 	if p.Off || p.Forget {
 		if err := s.shells.StopTap(ctx, p.Name, p.Pane, p.Forget); err != nil {
@@ -302,11 +316,11 @@ const maxHistoryCount = 5000
 
 func (s *Server) shellHistory(ctx context.Context, req request) response {
 	var p shellHistoryParams
-	if err := decodeParams(req.Params, &p); err != nil || p.Name == "" {
-		return errorResponse(req.ID, CodeInvalidParams, "name required")
+	if err := decodeParams(req.Params, &p); err != nil {
+		return errorResponse(req.ID, CodeInvalidParams, "invalid params")
 	}
-	if !s.hostMatches(p.Host) {
-		return shellErr(req.ID, tmux.ErrNotFound, nil)
+	if resp, ok := s.shellGuard(req.ID, p.Host, p.Name); !ok {
+		return resp
 	}
 	from := int64(-1)
 	if p.From != nil {
