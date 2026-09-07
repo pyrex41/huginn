@@ -114,6 +114,7 @@ func (s *server) initialize(params json.RawMessage) map[string]any {
 func (s *server) tools() []map[string]any {
 	out := tools()
 	out = append(out, shellReadTools()...)
+	out = append(out, shellHistoryTool())
 	if s.shellWrite {
 		out = append(out, shellWriteTools()...)
 	}

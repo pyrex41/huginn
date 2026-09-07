@@ -31,12 +31,12 @@ func toolNames(s *server) []string {
 func TestShellWriteToolsOffByDefault(t *testing.T) {
 	s := newTestServer(&stubBus{}, machine{Service: "h.box"})
 	names := strings.Join(toolNames(s), ",")
-	for _, want := range []string{"shell_list", "shell_screen"} {
+	for _, want := range []string{"shell_list", "shell_screen", "shell_history"} {
 		if !strings.Contains(names, want) {
 			t.Fatalf("%s missing from %s", want, names)
 		}
 	}
-	for _, off := range []string{"shell_send", "shell_keys", "shell_new", "shell_kill"} {
+	for _, off := range []string{"shell_send", "shell_keys", "shell_new", "shell_kill", "shell_tap"} {
 		if strings.Contains(names, off) {
 			t.Fatalf("%s must be off by default: %s", off, names)
 		}
@@ -47,7 +47,7 @@ func TestShellWriteToolsOffByDefault(t *testing.T) {
 	}
 	s.shellWrite = true
 	names = strings.Join(toolNames(s), ",")
-	if !strings.Contains(names, "shell_send") || !strings.Contains(names, "shell_kill") {
+	if !strings.Contains(names, "shell_send") || !strings.Contains(names, "shell_kill") || !strings.Contains(names, "shell_tap") {
 		t.Fatalf("--shell-write must list the write tools: %s", names)
 	}
 }
@@ -100,6 +100,26 @@ func TestShellSendForwardsAndSurfacesTypedRefusal(t *testing.T) {
 	}
 	if res := callTool(t, s, "shell_screen", map[string]any{"name": "build"}); res["isError"] != true {
 		t.Fatal("shell_screen without machine must fail")
+	}
+}
+
+func TestShellHistoryForwardsOffsets(t *testing.T) {
+	bus := &recordingBus{stubBus: stubBus{replies: map[string]string{
+		"h.a": `{"jsonrpc":"2.0","id":1,"result":{"source":"tap","lines":[{"offset":0,"text":"one"}],"from":0,"next":5,"size":5,"truncated_before":false}}`,
+	}}}
+	s := newTestServer(bus, machine{Service: "h.a"})
+	var out struct {
+		Result struct {
+			Source string `json:"source"`
+			Next   int64  `json:"next"`
+		} `json:"result"`
+	}
+	structured(t, callTool(t, s, "shell_history", map[string]any{"machine": "h.a", "name": "build", "from": float64(0), "count": float64(1)}), &out)
+	if out.Result.Source != "tap" || out.Result.Next != 5 {
+		t.Fatalf("out=%+v", out)
+	}
+	if bus.methods[0] != "shell/history" || bus.params[0]["from"] != float64(0) {
+		t.Fatalf("method=%s params=%v", bus.methods[0], bus.params[0])
 	}
 }
 

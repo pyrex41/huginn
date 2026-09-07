@@ -34,17 +34,18 @@ Flags:
   --token TOKEN       bearer token clients must present (or HUGINN_MCP_TOKEN)
   --timeout DUR       per-machine request timeout (default 30s)
   --stale-after DUR   drop a machine after this long without an announcement
-  --shell-write       also expose shell_send, shell_keys, shell_new, shell_kill
+  --shell-write       also expose shell_send, shell_keys, shell_new, shell_kill, shell_tap
 
 Session verbs: only session/list is exposed. prompt, interrupt, and
 permission stay off this surface until per-principal authorization exists:
 anything that can reach it would otherwise be able to drive every session
 on every machine.
 
-Shell verbs: shell_list and shell_screen are always on for machines that
-run huginn serve --shell. The four write tools are remote command execution
-as each machine's user for anyone holding this token; --shell-write turns
-them on, and off is the default for the same reason prompt is off.
+Shell verbs: shell_list, shell_screen, and shell_history are always on for
+machines that run huginn serve --shell. The write tools are remote command
+execution as each machine's user for anyone holding this token (shell_tap
+starts a recording on that machine); --shell-write turns them on, and off
+is the default for the same reason prompt is off.
 `)
 }
 
@@ -56,7 +57,7 @@ func main() {
 	token := fs.String("token", os.Getenv("HUGINN_MCP_TOKEN"), "bearer token (or HUGINN_MCP_TOKEN)")
 	timeout := fs.Duration("timeout", 30*time.Second, "per-machine request timeout")
 	staleAfter := fs.Duration("stale-after", presence.DefaultStaleAfter, "drop a machine after this long unheard")
-	shellWrite := fs.Bool("shell-write", false, "expose shell_send/keys/new/kill (remote command execution)")
+	shellWrite := fs.Bool("shell-write", false, "expose shell_send/keys/new/kill/tap (remote command execution)")
 	fs.SetOutput(os.Stderr)
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)

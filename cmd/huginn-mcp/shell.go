@@ -52,8 +52,43 @@ func shellReadTools() []map[string]any {
 	}
 }
 
+func shellHistoryTool() map[string]any {
+	return map[string]any{
+		"name": "shell_history",
+		"description": "Page a shell pane's history as lines. A tapped pane reads from its unbounded log (source=tap); an untapped one gets tmux's bounded history (source=tmux). " +
+			"Default is the tail. Pass from (an offset from a previous line) to read forward, or before (an offset) to read the lines ending before it. truncated_before says older lines existed but are gone.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"machine": shellMachineProp,
+				"name":    shellNameProp,
+				"pane":    shellPaneProp,
+				"from":    map[string]any{"type": "integer", "description": "Read forward from this line offset"},
+				"before":  map[string]any{"type": "integer", "description": "Read the lines ending before this offset"},
+				"count":   map[string]any{"type": "integer", "description": "Max lines, default 200, max 5000"},
+			},
+			"required": []string{"machine", "name"},
+		},
+	}
+}
+
 func shellWriteTools() []map[string]any {
 	return []map[string]any{
+		{
+			"name":        "shell_tap",
+			"description": "Start recording a shell pane's output to a log on that machine, seeded with tmux's history, so shell_history is unbounded from now on. off stops recording; forget also deletes the log.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"machine": shellMachineProp,
+					"name":    shellNameProp,
+					"pane":    shellPaneProp,
+					"off":     map[string]any{"type": "boolean", "description": "Stop recording, keep the log"},
+					"forget":  map[string]any{"type": "boolean", "description": "Stop recording and delete the log"},
+				},
+				"required": []string{"machine", "name"},
+			},
+		},
 		{
 			"name":        "shell_send",
 			"description": "Type text literally into a shell pane, optionally followed by Enter. This runs commands as the machine's user. Returns gen_before and gen_after; it does not wait for output. Read shell_screen afterwards.",
@@ -119,9 +154,11 @@ func shellWriteTools() []map[string]any {
 // tool gets.
 func (s *server) shellMethods() map[string]string {
 	m := map[string]string{
-		"shell_screen": "shell/screen",
+		"shell_screen":  "shell/screen",
+		"shell_history": "shell/history",
 	}
 	if s.shellWrite {
+		m["shell_tap"] = "shell/tap"
 		m["shell_send"] = "shell/send"
 		m["shell_keys"] = "shell/keys"
 		m["shell_new"] = "shell/new"
