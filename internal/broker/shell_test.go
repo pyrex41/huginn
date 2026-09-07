@@ -3,12 +3,15 @@ package broker
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/pyrex41/huginn/internal/adapter/tmux"
+	"github.com/pyrex41/huginn/internal/termlog"
 )
 
 // scriptRunner is a tmux stand-in: canned replies per subcommand and a
@@ -22,6 +25,13 @@ type scriptRunner struct {
 
 func (r *scriptRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
 	r.calls = append(r.calls, args)
+	joined := strings.Join(args, " ")
+	if args[0] == "display-message" && strings.Contains(joined, "#{pane_id}") {
+		return []byte("%0\n"), nil
+	}
+	if args[0] == "display-message" && strings.Contains(joined, "#{cursor_x}") {
+		return []byte("0:0:0\n"), nil
+	}
 	if args[0] == "capture-pane" {
 		i := r.n
 		if i >= len(r.screens) {
@@ -154,7 +164,7 @@ func TestShellScreenGenAndStaleSend(t *testing.T) {
 	}
 	var scr tmux.Screen
 	_ = json.Unmarshal(res, &scr)
-	if scr.Gen != tmux.Digest("$\n") || scr.Text != "$\n" {
+	if scr.Gen == "" || scr.Text != "$\n" {
 		t.Fatalf("screen=%+v", scr)
 	}
 	// Second capture matches: send goes through.
@@ -164,7 +174,7 @@ func TestShellScreenGenAndStaleSend(t *testing.T) {
 	}
 	var sent tmux.Sent
 	_ = json.Unmarshal(res, &sent)
-	if sent.GenBefore != scr.Gen || sent.GenAfter != tmux.Digest("$ ls\nfoo\n") {
+	if sent.GenBefore != scr.Gen || sent.GenAfter == scr.Gen {
 		t.Fatalf("sent=%+v", sent)
 	}
 	// Third capture has moved: the old gen is refused with the typed code.
@@ -174,8 +184,8 @@ func TestShellScreenGenAndStaleSend(t *testing.T) {
 		t.Fatalf("stale gen: %+v", rpcErr)
 	}
 	data, _ := rpcErr.Data.(map[string]any)
-	if data["gen_before"] != tmux.Digest("$ ls\nfoo\n") {
-		t.Fatalf("error data must carry gen_before: %+v", rpcErr.Data)
+	if data["gen_before"] != sent.GenAfter {
+		t.Fatalf("error data must carry gen_before: %+v want %s", rpcErr.Data, sent.GenAfter)
 	}
 	for _, c := range r.calls[sends:] {
 		if c[0] == "send-keys" {
@@ -185,19 +195,66 @@ func TestShellScreenGenAndStaleSend(t *testing.T) {
 }
 
 // tapRunner answers the pane lookups tap and history make.
-type tapRunner struct{ scriptRunner }
+// tapRunner spawns the real termlog writer on pipe-pane so StartTap's
+// lock-based recording check runs against real code, the same way tmux
+// forks the shell-writer child.
+type tapRunner struct {
+	scriptRunner
+	pipeW  *os.File
+	writer chan struct{}
+}
 
 func (r *tapRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
 	joined := strings.Join(args, " ")
 	switch {
 	case args[0] == "display-message" && strings.Contains(joined, "#{pane_id}"):
 		return []byte("%2\n"), nil
+	case args[0] == "display-message" && strings.Contains(joined, "#{pane_pipe}"):
+		if r.pipeW != nil {
+			return []byte("1\n"), nil
+		}
+		return []byte("0\n"), nil
 	case args[0] == "display-message" && strings.Contains(joined, "#{history_size}"):
 		return []byte("3:2000\n"), nil
 	case args[0] == "capture-pane":
 		return []byte("one\ntwo\nthree\n"), nil
+	case args[0] == "pipe-pane":
+		return r.pipePane(args)
 	}
 	return r.scriptRunner.Run(ctx, args...)
+}
+
+func (r *tapRunner) pipePane(args []string) ([]byte, error) {
+	cmd := args[len(args)-1]
+	if !strings.Contains(cmd, "shell-writer") {
+		if r.pipeW != nil {
+			_ = r.pipeW.Close()
+			<-r.writer
+			r.pipeW = nil
+		}
+		return nil, nil
+	}
+	var flags []string
+	for _, part := range strings.Split(cmd, " --") {
+		if k, v, ok := strings.Cut(strings.TrimSpace(part), " "); ok {
+			switch k {
+			case "dir", "shell", "pane", "max":
+				flags = append(flags, "--"+k, strings.Trim(v, "'"))
+			}
+		}
+	}
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	r.pipeW = pw
+	r.writer = make(chan struct{})
+	go func() {
+		termlog.RunWriter(flags, pr, io.Discard)
+		_ = pr.Close()
+		close(r.writer)
+	}()
+	return nil, nil
 }
 
 func TestShellTapAndHistory(t *testing.T) {

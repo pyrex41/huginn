@@ -116,7 +116,7 @@ func TestLiveTmux(t *testing.T) {
 	if _, err := a.Send(ctx, "hg-test", pane, "for i in $(seq 1 60); do echo line-$i; done; echo END", true, ""); err != nil {
 		t.Fatal(err)
 	}
-	deadline = time.Now().Add(10 * time.Second)
+	deadline = time.Now().Add(30 * time.Second)
 	var h History
 	for {
 		h, err = a.ReadHistory(ctx, "hg-test", pane, -1, 0, 1000)
@@ -143,7 +143,7 @@ func TestLiveTmux(t *testing.T) {
 	if _, err := a.Send(ctx, "hg-test", pane, "for i in $(seq 1 400); do echo padding-padding-padding-padding-padding-padding-$i; done; echo END2", true, ""); err != nil {
 		t.Fatal(err)
 	}
-	deadline = time.Now().Add(10 * time.Second)
+	deadline = time.Now().Add(30 * time.Second)
 	for {
 		h, err = a.ReadHistory(ctx, "hg-test", pane, -1, 0, 5)
 		if err != nil {

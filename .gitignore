@@ -8,3 +8,5 @@ plugins/huginn-channel/bin/
 
 result
 result-*
+/huginn
+/huginn-mcp

@@ -23,6 +23,13 @@ func (f *fakeRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
 	if err, ok := f.errs[args[0]]; ok {
 		return nil, err
 	}
+	joined := strings.Join(args, " ")
+	if args[0] == "display-message" && strings.Contains(joined, "#{pane_id}") {
+		return []byte("%0\n"), nil
+	}
+	if args[0] == "display-message" && strings.Contains(joined, "#{cursor_x}") {
+		return []byte("0:0:0\n"), nil
+	}
 	if args[0] == "capture-pane" && len(f.screens) > 0 {
 		i := f.captureN
 		if i >= len(f.screens) {
@@ -147,14 +154,18 @@ func TestSendRefusesWhenScreenMoved(t *testing.T) {
 }
 
 func TestSendLiteralThenEnter(t *testing.T) {
-	f := &fakeRunner{screens: []string{"$\n", "$ make\n"}}
+	f := &fakeRunner{screens: []string{"$\n", "$\n", "$ make\n"}}
 	a := NewWithRunner(f)
-	res, err := a.Send(context.Background(), "build", "", "make -j4", true, Digest("$\n"))
+	before, err := a.Screen(context.Background(), "build", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.GenBefore != Digest("$\n") || res.GenAfter != Digest("$ make\n") {
-		t.Fatalf("gens=%+v", res)
+	res, err := a.Send(context.Background(), "build", "", "make -j4", true, before.Gen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.GenBefore != before.Gen || res.GenAfter == before.Gen {
+		t.Fatalf("gens=%+v before=%s", res, before.Gen)
 	}
 	var sends [][]string
 	for _, c := range f.calls {
@@ -165,10 +176,10 @@ func TestSendLiteralThenEnter(t *testing.T) {
 	if len(sends) != 2 {
 		t.Fatalf("sends=%v", sends)
 	}
-	if strings.Join(sends[0], " ") != "send-keys -t =build: -l -- make -j4" {
+	if strings.Join(sends[0], " ") != "send-keys -t %0 -l -- make -j4" {
 		t.Fatalf("text must be literal: %v", sends[0])
 	}
-	if strings.Join(sends[1], " ") != "send-keys -t =build: Enter" {
+	if strings.Join(sends[1], " ") != "send-keys -t %0 Enter" {
 		t.Fatalf("enter must be a key: %v", sends[1])
 	}
 }
@@ -181,7 +192,7 @@ func TestKeysAreNames(t *testing.T) {
 	}
 	found := false
 	for _, c := range f.calls {
-		if strings.Join(c, " ") == "send-keys -t =build:1.0 C-c Enter" {
+		if strings.Join(c, " ") == "send-keys -t %0 C-c Enter" {
 			found = true
 		}
 	}
@@ -203,7 +214,7 @@ func TestScreenTrimsPaddedTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if scr.Text != "$ ls\nfoo\n" || scr.Gen != Digest("$ ls\nfoo\n") {
+	if scr.Text != "$ ls\nfoo\n" || scr.Gen == "" {
 		t.Fatalf("screen=%q", scr.Text)
 	}
 }

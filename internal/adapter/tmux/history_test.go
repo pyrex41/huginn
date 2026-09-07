@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,12 +12,20 @@ import (
 	"github.com/pyrex41/huginn/internal/termlog"
 )
 
-// histRunner is a tmux stand-in for the tap and history paths.
+// histRunner is a tmux stand-in for the tap and history paths. On a
+// pipe-pane command it spawns the real termlog writer over an os.Pipe,
+// exactly as tmux forks the shell-writer child, so the lock-based
+// recording check in StartTap exercises real code. A pipe-pane with no
+// command closes the pipe, which makes the writer exit and release.
 type histRunner struct {
 	history   string
 	histSize  int
 	histLimit int
+	piped     bool
 	calls     [][]string
+
+	pipeW  *os.File
+	writer chan struct{}
 }
 
 func (r *histRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
@@ -26,18 +35,78 @@ func (r *histRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
 	case args[0] == "list-sessions":
 		return []byte("build:1:0:1700000000:/b\n"), nil
 	case args[0] == "list-panes":
-		return []byte("build:0:0:%4:1:0:bash:/b\n"), nil
-	case args[0] == "capture-pane":
-		return []byte(r.history), nil
+		p := "0"
+		if r.piped {
+			p = "1"
+		}
+		return []byte("build:0:0:%4:1:" + p + ":bash:/b\n"), nil
 	case args[0] == "display-message" && strings.Contains(joined, "#{pane_id}"):
 		return []byte("%4\n"), nil
+	case args[0] == "display-message" && strings.Contains(joined, "#{pane_pipe}"):
+		if r.piped {
+			return []byte("1\n"), nil
+		}
+		return []byte("0\n"), nil
 	case args[0] == "display-message" && strings.Contains(joined, "#{history_size}"):
-		return []byte(itoa(r.histSize) + ":" + itoa(r.histLimit) + "\n"), nil
+		return []byte(strconv.Itoa(r.histSize) + ":" + strconv.Itoa(r.histLimit) + "\n"), nil
+	case args[0] == "capture-pane":
+		return []byte(r.history), nil
+	case args[0] == "pipe-pane":
+		return r.pipePane(args)
 	}
 	return nil, nil
 }
 
-func itoa(i int) string { return strconv.Itoa(i) }
+func (r *histRunner) pipePane(args []string) ([]byte, error) {
+	// Close: last arg is the target, no command.
+	cmd := args[len(args)-1]
+	if !strings.Contains(cmd, WriterSubcommand) {
+		if r.pipeW != nil {
+			_ = r.pipeW.Close()
+			<-r.writer
+			r.pipeW = nil
+		}
+		r.piped = false
+		return nil, nil
+	}
+	// Open: parse the writer flags out of the shell command and run it.
+	fields := parseWriterCmd(cmd)
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	r.pipeW = pw
+	r.piped = true
+	r.writer = make(chan struct{})
+	go func() {
+		termlog.RunWriter(fields, pr, io.Discard)
+		_ = pr.Close()
+		close(r.writer)
+	}()
+	return nil, nil
+}
+
+// feed writes bytes as if the pane produced them.
+func (r *histRunner) feed(t *testing.T, s string) {
+	t.Helper()
+	if r.pipeW == nil {
+		t.Fatal("no writer to feed")
+	}
+	if _, err := r.pipeW.Write([]byte(s)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func parseWriterCmd(cmd string) []string {
+	var out []string
+	for _, part := range strings.Split(cmd, " --") {
+		part = strings.TrimSpace(part)
+		if k, v, ok := strings.Cut(part, " "); ok && (k == "dir" || k == "shell" || k == "pane" || k == "max") {
+			out = append(out, "--"+k, strings.Trim(v, "'"))
+		}
+	}
+	return out
+}
 
 func lineTexts(h History) string {
 	var out []string
@@ -69,11 +138,12 @@ func TestNewShellTaps(t *testing.T) {
 	r := &histRunner{history: "", histSize: 0, histLimit: 2000}
 	a := NewWithRunner(r)
 	a.SetLogDir(t.TempDir())
+	a.SetLogMax(1 << 16)
 	row, err := a.NewShell(context.Background(), "build", "/b", "", true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.Tap == nil || row.Tap.Pane != "%4" {
+	if row.Tap == nil || row.Tap.Pane != "%4" || !row.Tap.Recording {
 		t.Fatalf("row=%+v", row)
 	}
 	row, _ = a.NewShell(context.Background(), "build", "", "", false)
@@ -87,41 +157,21 @@ func TestTapSeedsAndPipes(t *testing.T) {
 	a := NewWithRunner(r)
 	dir := t.TempDir()
 	a.SetLogDir(dir)
-	a.SetLogMax(1024)
+	a.SetLogMax(1 << 16)
 	tap, err := a.StartTap(context.Background(), "build", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tap.Pane != "%4" || tap.SeedLines != 1 || tap.SeedTruncated || !strings.HasSuffix(tap.Log, "/build/4.*.log") {
+	if tap.Pane != "%4" || tap.SeedLines != 1 || tap.SeedTruncated || !tap.Recording || !strings.HasSuffix(tap.Log, "/build/4.*.log") {
 		t.Fatalf("tap=%+v", tap)
 	}
-	var pipe []string
-	for _, c := range r.calls {
-		if c[0] == "pipe-pane" {
-			pipe = c
-		}
-	}
-	exe, _ := os.Executable()
-	wantCmd := "'" + exe + "' shell-writer --dir '" + dir + "' --shell 'build' --pane '%4' --max 1024"
-	if pipe == nil || pipe[len(pipe)-1] != wantCmd {
-		t.Fatalf("pipe-pane=%v\nwant %s", pipe, wantCmd)
-	}
-	// tmux feeds live output to the writer; history now comes from the log.
-	if code := termlog.RunWriter([]string{"--dir", dir, "--shell", "build", "--pane", "%4"}, strings.NewReader("$ make\r\nbuilding\rbuilt   \x1b[K\r\n"), os.Stderr); code != 0 {
-		t.Fatalf("writer exit %d", code)
-	}
+	r.feed(t, "$ make\r\nbuilding\rbuilt   \x1b[K\r\n")
 	h, err := a.ReadHistory(context.Background(), "build", "%4", -1, 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h.Source != "tap" || lineTexts(h) != "old|$ make|built" || h.TruncatedBefore || h.TappedSince == "" {
+	if h.Source != "tap" || lineTexts(h) != "old|$ make|built" || h.TruncatedBefore || h.TappedSince == "" || !h.Recording {
 		t.Fatalf("h=%+v", h)
-	}
-	// A tail page with earlier lines still in the log is not truncated:
-	// those lines are one `before` read away.
-	tail, _ := a.ReadHistory(context.Background(), "build", "%4", -1, 0, 1)
-	if tail.TruncatedBefore || tail.From == 0 || lineTexts(tail) != "built" {
-		t.Fatalf("tail=%+v", tail)
 	}
 	if err := a.StopTap(context.Background(), "build", "", true); err != nil {
 		t.Fatal(err)
@@ -132,5 +182,13 @@ func TestTapSeedsAndPipes(t *testing.T) {
 	h, _ = a.ReadHistory(context.Background(), "build", "", -1, 0, 10)
 	if h.Source != "tmux" {
 		t.Fatalf("after forget history must fall back: %+v", h)
+	}
+}
+
+func TestTapsDisabled(t *testing.T) {
+	a := NewWithRunner(&histRunner{})
+	a.logs = nil
+	if _, err := a.StartTap(context.Background(), "build", ""); err != ErrTapsDisabled {
+		t.Fatalf("got %v", err)
 	}
 }

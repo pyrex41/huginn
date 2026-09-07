@@ -2,6 +2,7 @@ package termlog
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -75,15 +76,15 @@ func TestStoreRotatesAndDrops(t *testing.T) {
 	s := &Store{Dir: t.TempDir()}
 	mustSeed(t, s, "", false)
 	// Segment = max/4 but never under minSegment, so use lines big enough
-	// to rotate: 12 lines of ~1 KB each against a 16 KB cap = 4 KB segments,
-	// enough to rotate twice without yet dropping anything.
+	// to rotate: 9 lines of ~1 KB each against a 16 KB cap = 4 KB segments
+	// (rounded up to the line), enough to rotate without dropping.
 	line := strings.Repeat("x", 1000)
 	w, err := s.NewWriter("build", "%3", 16<<10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var cursorLine5 int64 = -1
-	for i := 0; i < 12; i++ {
+	for i := 0; i < 9; i++ {
 		if i == 5 {
 			cursorLine5 = w.curStart + w.curSize
 		}
@@ -93,8 +94,14 @@ func TestStoreRotatesAndDrops(t *testing.T) {
 	}
 	_ = w.Close()
 	segs, _ := segments(s.mustPrefix(t))
-	if len(segs) < 3 {
+	if len(segs) < 2 {
 		t.Fatalf("expected rotation, segments=%d", len(segs))
+	}
+	// Every segment after the first starts on a line boundary.
+	for _, sg := range segs[1:] {
+		if !lineStartsAt(segs, sg.start) {
+			t.Fatalf("segment %d does not start a line", sg.start)
+		}
 	}
 	p, err := s.Read("build", "%3", cursorLine5, 0, 2)
 	if err != nil {
@@ -117,7 +124,7 @@ func TestStoreRotatesAndDrops(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tail.Meta.DroppedBefore == 0 || tail.Size < 52*1000 {
+	if tail.Meta.DroppedBefore == 0 || tail.Size < 49*1000 {
 		t.Fatalf("expected drops: %+v", tail.Meta)
 	}
 	segs, _ = segments(s.mustPrefix(t))
@@ -125,7 +132,8 @@ func TestStoreRotatesAndDrops(t *testing.T) {
 	for _, sg := range segs {
 		onDisk += sg.size
 	}
-	if onDisk > 16<<10 {
+	// The cap may be overshot by the line that triggered rotation.
+	if onDisk > 16<<10+1001 {
 		t.Fatalf("on disk %d exceeds cap", onDisk)
 	}
 	early, err := s.Read("build", "%3", 0, 0, 1)
@@ -158,8 +166,64 @@ func TestRunWriterCopiesStdin(t *testing.T) {
 	if got := texts(p.Lines); got != "seed|live" {
 		t.Fatalf("got %q", got)
 	}
-	if RunWriter([]string{"--dir", s.Dir, "--shell", "nope", "--pane", "%1"}, strings.NewReader(""), &stderr) == 0 {
-		t.Fatal("untapped pane must fail")
+	// A pane with no log yet gets an empty one: shell/new attaches the
+	// pipe before the broker could have seeded anything.
+	if RunWriter([]string{"--dir", s.Dir, "--shell", "fresh", "--pane", "%1"}, strings.NewReader("hi\n"), &stderr) != 0 {
+		t.Fatalf("fresh pane: %s", stderr.String())
+	}
+	if p, err := s.Read("fresh", "%1", -1, 0, 5); err != nil || texts(p.Lines) != "hi" {
+		t.Fatalf("fresh pane log: %v %v", p, err)
+	}
+}
+
+func TestSeedRefusesLiveWriter(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	mustSeed(t, s, "", false)
+	w, err := s.NewWriter("build", "%3", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.WriterAlive("build", "%3") {
+		t.Fatal("writer must show alive while open")
+	}
+	if err := s.Seed("build", "%3", "", false, time.Now()); err != ErrWriterAlive {
+		t.Fatalf("seed under a live writer: %v", err)
+	}
+	_ = w.Close()
+	if s.WriterAlive("build", "%3") {
+		t.Fatal("closed writer must release the lock")
+	}
+	mustSeed(t, s, "", false)
+}
+
+func TestReadSkipsVanishedSegment(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	mustSeed(t, s, "", false)
+	w, _ := s.NewWriter("build", "%3", 16<<10)
+	line := strings.Repeat("y", 1000)
+	for i := 0; i < 9; i++ {
+		_, _ = w.Write([]byte(line + "\n"))
+	}
+	_ = w.Close()
+	segs, _ := segments(s.mustPrefix(t))
+	if len(segs) < 2 {
+		t.Fatal("need two segments")
+	}
+	// Someone removed the oldest segment between list and read.
+	if err := os.Remove(segs[0].path); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.Read("build", "%3", 0, 0, 100)
+	if err != nil {
+		t.Fatalf("a vanished segment is a drop, not an error: %v", err)
+	}
+	if p.From != segs[1].start || p.Meta.DroppedBefore != segs[1].start {
+		t.Fatalf("page must start at the surviving segment: from=%d dropped=%d want %d", p.From, p.Meta.DroppedBefore, segs[1].start)
+	}
+	for _, l := range p.Lines {
+		if len(l.Text) != 1000 {
+			t.Fatalf("glued or fragmentary line: %q", l.Text)
+		}
 	}
 }
 

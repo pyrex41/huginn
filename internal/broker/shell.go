@@ -32,6 +32,10 @@ const (
 	// CodeScreenMoved: the pane's content digest no longer matches
 	// expect_gen, so nothing was sent. Error data carries gen_before.
 	CodeScreenMoved = -32012
+	// CodeTapsDisabled: the sidecar was started without shell taps.
+	CodeTapsDisabled = -32013
+	// CodeTapFailed: the pipe attached but no writer took the log.
+	CodeTapFailed = -32014
 )
 
 // ShellMethods lists the verbs the shell family adds, for callers that
@@ -314,6 +318,9 @@ func (s *Server) shellHistory(ctx context.Context, req request) response {
 	if p.Before < 0 {
 		return errorResponse(req.ID, CodeInvalidParams, "before must be >= 0")
 	}
+	if from >= 0 && p.Before > 0 {
+		return errorResponse(req.ID, CodeInvalidParams, "from and before are exclusive")
+	}
 	count := p.Count
 	if count > maxHistoryCount {
 		count = maxHistoryCount
@@ -339,6 +346,10 @@ func shellErr(id json.RawMessage, err error, sent *tmux.Sent) response {
 		return errorResponse(id, CodeShellNotFound, err.Error())
 	case errors.Is(err, tmux.ErrExists):
 		return errorResponse(id, CodeShellExists, err.Error())
+	case errors.Is(err, tmux.ErrTapsDisabled):
+		return errorResponse(id, CodeTapsDisabled, err.Error())
+	case errors.Is(err, tmux.ErrTapNotRecording):
+		return errorResponse(id, CodeTapFailed, err.Error())
 	case errors.Is(err, tmux.ErrBadName), errors.Is(err, tmux.ErrBadPane),
 		errors.Is(err, tmux.ErrBadKey), errors.Is(err, tmux.ErrEmptyInput):
 		return errorResponse(id, CodeInvalidParams, err.Error())

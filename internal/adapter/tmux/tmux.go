@@ -96,6 +96,13 @@ var (
 	ErrBadKey      = errors.New("tmux: invalid key name")
 	ErrScreenMoved = errors.New("tmux: screen moved since expect_gen was read")
 	ErrEmptyInput  = errors.New("tmux: nothing to send")
+	// ErrTapsDisabled: the adapter was built without a log directory, so
+	// there is nothing to tap into. Distinct from ErrNoLog, which means a
+	// specific pane is not tapped.
+	ErrTapsDisabled = errors.New("tmux: shell taps are not enabled")
+	// ErrTapNotRecording: the pipe was attached but no writer took the
+	// log. The tap was rolled back.
+	ErrTapNotRecording = errors.New("tmux: tap did not start recording")
 )
 
 // Shell is one shell/list row: a tmux session on this host. Host names the
@@ -270,11 +277,11 @@ func (a *Adapter) Get(ctx context.Context, name string) (Shell, error) {
 // Screen captures one pane. lines is how many lines of scrollback to
 // include before the visible screen; zero is the visible screen only.
 func (a *Adapter) Screen(ctx context.Context, name, pane string, lines int) (Screen, error) {
-	target, err := a.target(ctx, name, pane)
+	_, paneID, err := a.paneTarget(ctx, name, pane)
 	if err != nil {
 		return Screen{}, err
 	}
-	return a.capture(ctx, target, lines)
+	return a.capture(ctx, paneID, lines)
 }
 
 func (a *Adapter) capture(ctx context.Context, target string, lines int) (Screen, error) {
@@ -287,13 +294,27 @@ func (a *Adapter) capture(ctx context.Context, target string, lines int) (Screen
 		return Screen{}, mapErr(err)
 	}
 	// capture-pane pads to the pane height; drop the blank tail so a
-	// caller sees the screen, not the window size, and gen digests that.
+	// caller sees the screen, not the window size.
 	text := strings.TrimRight(string(out), " \n") + "\n"
-	scr := Screen{Text: text, Gen: Digest(text)}
-	cur, err := a.runner.Run(ctx, "display-message", "-p", "-t", target, "-F", "#{cursor_x}:#{cursor_y}")
-	if err == nil {
-		scr.Cursor = parseCursor(cur)
+	scr := Screen{Text: text}
+	visible := text
+	if lines > 0 {
+		vout, verr := a.runner.Run(ctx, "capture-pane", "-p", "-t", target)
+		if verr != nil {
+			return Screen{}, mapErr(verr)
+		}
+		visible = strings.TrimRight(string(vout), " \n") + "\n"
 	}
+	stamp := ""
+	if cur, err := a.runner.Run(ctx, "display-message", "-p", "-t", target, "-F", "#{cursor_x}:#{cursor_y}:#{history_size}"); err == nil {
+		f := strings.Split(strings.TrimSpace(string(cur)), sep)
+		scr.Cursor = parseCursor([]byte(strings.Join(f[:min(2, len(f))], sep)))
+		stamp = strings.TrimSpace(string(cur))
+	}
+	// gen fingerprints what the caller saw: the visible screen, where the
+	// cursor is, and how far the pane has scrolled. A digest of the text
+	// alone would call two identical prompts the same screen.
+	scr.Gen = Digest(visible + "\x00" + stamp)
 	return scr, nil
 }
 
@@ -338,21 +359,24 @@ func (a *Adapter) Keys(ctx context.Context, name, pane string, keys []string, ex
 }
 
 func (a *Adapter) input(ctx context.Context, name, pane, expectGen string, do func(target string) error) (Sent, error) {
-	target, err := a.target(ctx, name, pane)
+	_, paneID, err := a.paneTarget(ctx, name, pane)
 	if err != nil {
 		return Sent{}, err
 	}
-	before, err := a.capture(ctx, target, 0)
+	before, err := a.capture(ctx, paneID, 0)
 	if err != nil {
 		return Sent{}, err
 	}
+	// expect_gen is a check immediately before the send, not an atomic
+	// compare-and-swap: a screen that moves between this check and the
+	// keystroke landing is not caught. gen_after reports where it ended up.
 	if expectGen != "" && expectGen != before.Gen {
 		return Sent{GenBefore: before.Gen}, ErrScreenMoved
 	}
-	if err := do(target); err != nil {
+	if err := do(paneID); err != nil {
 		return Sent{GenBefore: before.Gen}, mapErr(err)
 	}
-	after, err := a.capture(ctx, target, 0)
+	after, err := a.capture(ctx, paneID, 0)
 	if err != nil {
 		return Sent{GenBefore: before.Gen}, err
 	}
@@ -380,6 +404,8 @@ func (a *Adapter) NewShell(ctx context.Context, name, cwd, command string, tap b
 	if tap {
 		got, err := a.StartTap(ctx, name, "")
 		if err != nil {
+			// Do not hand back a live session the caller has no row for.
+			_, _ = a.runner.Run(ctx, "kill-session", "-t", exact(name))
 			return Shell{}, err
 		}
 		t = &got
@@ -528,7 +554,7 @@ func ParsePanes(out []byte) (map[string][]Pane, error) {
 	for _, line := range lines(out) {
 		f := strings.SplitN(line, sep, paneFields)
 		if len(f) != paneFields {
-			return nil, fmt.Errorf("tmux: list-panes: want 7 fields, got %d in %q", len(f), line)
+			return nil, fmt.Errorf("tmux: list-panes: want %d fields, got %d in %q", paneFields, len(f), line)
 		}
 		win, err := strconv.Atoi(f[1])
 		if err != nil {
@@ -645,6 +671,9 @@ type Tap struct {
 	// SeedTruncated says tmux had already dropped older ones.
 	SeedLines     int  `json:"seed_lines"`
 	SeedTruncated bool `json:"seed_truncated"`
+	// Recording confirms a writer is holding the log after the pipe was
+	// attached. A tap that returns Recording false did not take.
+	Recording bool `json:"recording"`
 }
 
 // History is shell/history. Source is "tap" when read from a log and
@@ -665,20 +694,25 @@ type History struct {
 	// DroppedBefore is the oldest offset still on disk for a tapped pane;
 	// the size cap rotated out everything before it.
 	DroppedBefore int64 `json:"dropped_before,omitempty"`
-	HistoryLimit  int   `json:"history_limit,omitempty"`
+	// Recording is whether a writer is appending to the log right now. A
+	// tapped log whose writer has died (pane closed, disk full, huginn's
+	// log dir changed) reads as source "tap" with Recording false: the
+	// tail is real but no longer grows.
+	Recording bool `json:"recording,omitempty"`
+	// TappedElsewhere is set when tmux says the pane is piped but this
+	// process has no log for it, e.g. after a restart with a different
+	// --shell-log-dir; the answer then falls back to tmux history.
+	TappedElsewhere bool `json:"tapped_elsewhere,omitempty"`
+	HistoryLimit    int  `json:"history_limit,omitempty"`
 }
 
 // StartTap seeds a log from tmux's history and starts pipe-pane into it.
 // Tapping an already tapped pane restarts the log from current history.
 func (a *Adapter) StartTap(ctx context.Context, name, pane string) (Tap, error) {
 	if a.logs == nil {
-		return Tap{}, termlog.ErrNoLog
+		return Tap{}, ErrTapsDisabled
 	}
-	target, paneID, err := a.paneTarget(ctx, name, pane)
-	if err != nil {
-		return Tap{}, err
-	}
-	seed, truncated, _, err := a.tmuxHistory(ctx, target)
+	_, paneID, err := a.paneTarget(ctx, name, pane)
 	if err != nil {
 		return Tap{}, err
 	}
@@ -686,18 +720,41 @@ func (a *Adapter) StartTap(ctx context.Context, name, pane string) (Tap, error) 
 	if err != nil {
 		return Tap{}, err
 	}
+	// Close any existing pipe first and wait for its writer to let go, so
+	// Seed never deletes segments a live writer still holds and a stray
+	// rotation cannot land in the fresh log's offset space.
+	if _, err := a.runner.Run(ctx, "pipe-pane", "-t", paneID); err != nil {
+		return Tap{}, mapErr(err)
+	}
+	// Wait for the old writer, if any, to release before Seed deletes the
+	// segments it holds. A first tap has none and this returns at once.
+	a.logs.WaitReleased(name, paneID, 2*time.Second)
+	seed, truncated, _, err := a.tmuxHistory(ctx, paneID)
+	if err != nil {
+		return Tap{}, err
+	}
 	if err := a.logs.Seed(name, paneID, seed, truncated, a.now()); err != nil {
 		return Tap{}, err
 	}
-	if _, err := a.runner.Run(ctx, "pipe-pane", "-t", target, cmd); err != nil {
+	if _, err := a.runner.Run(ctx, "pipe-pane", "-t", paneID, cmd); err != nil {
 		return Tap{}, mapErr(err)
 	}
+	// pipe-pane forks the writer and returns; its stderr is discarded by
+	// tmux, so the only proof it started is the lock it takes. Without
+	// that, the tap silently records nothing.
+	recording := a.logs.WaitWriter(name, paneID, 2*time.Second)
 	m, _ := a.logs.Meta(name, paneID)
 	logPath, _ := a.logs.Path(name, paneID)
-	return Tap{
+	tap := Tap{
 		Pane: paneID, Log: logPath, TappedSince: m.TappedSince,
 		SeedLines: strings.Count(seed, "\n"), SeedTruncated: truncated,
-	}, nil
+		Recording: recording,
+	}
+	if !recording {
+		_, _ = a.runner.Run(ctx, "pipe-pane", "-t", paneID)
+		return tap, ErrTapNotRecording
+	}
+	return tap, nil
 }
 
 // writerCommand is the shell line tmux runs for a tapped pane. pipe-pane
@@ -719,13 +776,13 @@ func (a *Adapter) writerCommand(name, paneID string) (string, error) {
 // StopTap ends pipe-pane. The log stays on disk unless forget is set.
 func (a *Adapter) StopTap(ctx context.Context, name, pane string, forget bool) error {
 	if a.logs == nil {
-		return termlog.ErrNoLog
+		return ErrTapsDisabled
 	}
-	target, paneID, err := a.paneTarget(ctx, name, pane)
+	_, paneID, err := a.paneTarget(ctx, name, pane)
 	if err != nil {
 		return err
 	}
-	if _, err := a.runner.Run(ctx, "pipe-pane", "-t", target); err != nil {
+	if _, err := a.runner.Run(ctx, "pipe-pane", "-t", paneID); err != nil {
 		return mapErr(err)
 	}
 	if forget {
@@ -750,6 +807,7 @@ func (a *Adapter) ReadHistory(ctx context.Context, name, pane string, from, befo
 				From: page.From, Next: page.Next, Size: page.Size,
 				TappedSince: page.Meta.TappedSince, DroppedBefore: page.Meta.DroppedBefore,
 				TruncatedBefore: page.Meta.SeedTruncated || page.Meta.DroppedBefore > 0,
+				Recording:       a.logs.WriterAlive(name, paneID),
 			}, nil
 		}
 		if !errors.Is(err, termlog.ErrNoLog) {
@@ -760,11 +818,14 @@ func (a *Adapter) ReadHistory(ctx context.Context, name, pane string, from, befo
 	if err != nil {
 		return History{}, err
 	}
+	// tmux says this pane is piped but we have no log for it: another
+	// process, or this one before a log-dir change, owns the recording.
+	tappedElsewhere := a.logs != nil && a.paneIsPiped(ctx, name, paneID)
 	lines := termlog.Render([]byte(text), 0)
 	if count <= 0 {
 		count = 200
 	}
-	h := History{Source: "tmux", Pane: paneID, Lines: []termlog.Line{}, Size: int64(len(text)), TruncatedBefore: truncated, HistoryLimit: limit}
+	h := History{Source: "tmux", Pane: paneID, Lines: []termlog.Line{}, Size: int64(len(text)), TruncatedBefore: truncated, HistoryLimit: limit, TappedElsewhere: tappedElsewhere}
 	switch {
 	case before > 0:
 		var kept []termlog.Line
@@ -829,6 +890,15 @@ func (a *Adapter) tmuxHistory(ctx context.Context, target string) (text string, 
 		truncated = limit > 0 && size >= limit
 	}
 	return text, truncated, limit, nil
+}
+
+// paneIsPiped reports tmux's pane_pipe flag for a pane id.
+func (a *Adapter) paneIsPiped(ctx context.Context, name, paneID string) bool {
+	out, err := a.runner.Run(ctx, "display-message", "-p", "-t", paneID, "-F", "#{pane_pipe}")
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "1"
 }
 
 // paneTarget resolves name + pane to a tmux target and the pane's %id,
