@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/pyrex41/huginn/internal/broker"
-	"github.com/pyrex41/huginn/internal/overlay"
 	"github.com/pyrex41/huginn/internal/presence"
 )
 
@@ -45,7 +44,7 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `huginn — host sidecar for grokbot (five verbs)
 
 Usage:
-  huginn serve [--bind 127.0.0.1:7419] [--token TOKEN] [--tailcat] [--tailcat-allow nodekey:…]
+  huginn serve [--bind 127.0.0.1:7419] [--token TOKEN]
                [--zmqcat] [--zmqcat-listen ADDR] [--zmqcat-service NAME]
                [--zmqcat-workers N] [--zmqcat-no-presence]
   huginn list [--addr 127.0.0.1:7419] [--token TOKEN] [--liveness live|resumable]
@@ -55,10 +54,7 @@ Usage:
 Environment:
   HUGINN_TOKEN   sidecar secret (required if --token is omitted)
 
-serve binds loopback only. --tailcat is an optional userspace overlay
-(not a sixth verb): it prints a tc… ConnBlob to stderr. Anyone who dials
-the overlay still needs HUGINN_TOKEN. Without --tailcat-allow the ConnBlob
-is a capability to reach the socket.
+serve binds loopback only.
 
 Grok attaches via ACP. Codex attaches as a second JSON-RPC client on a live
 app-server unix/loopback socket (codex --remote).
@@ -71,8 +67,6 @@ Project .mcp.json names the server huginn. Team/Enterprise need channelsEnabled.
 type serveOpts struct {
 	Bind          string
 	Token         string
-	Tailcat       bool
-	Allow         []string
 	ZMQCat        bool
 	ZMQListen     string
 	ZMQService    string
@@ -81,40 +75,24 @@ type serveOpts struct {
 	PresenceEvery time.Duration
 }
 
-type stringList []string
-
-func (s *stringList) String() string { return strings.Join(*s, ",") }
-
-func (s *stringList) Set(v string) error {
-	*s = append(*s, v)
-	return nil
-}
-
 func parseServe(args []string) (serveOpts, error) {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	bind := fs.String("bind", defaultBind, "loopback listen address")
 	token := fs.String("token", os.Getenv("HUGINN_TOKEN"), "auth token (or HUGINN_TOKEN)")
-	tailcat := fs.Bool("tailcat", false, "optional Tailcat overlay (ephemeral key; prints tc… token to stderr)")
 	zmqEnabled := fs.Bool("zmqcat", false, "serve JSON-RPC requests as a zmqcat READY worker")
 	zmqListen := fs.String("zmqcat-listen", "", "zmqcat local sidecar address")
 	zmqService := fs.String("zmqcat-service", "huginn", "zmqcat service mailbox")
 	zmqWorkers := fs.Int("zmqcat-workers", defaultZMQWorkers, "concurrent zmqcat READY workers")
 	noPresence := fs.Bool("zmqcat-no-presence", false, "do not announce this sidecar on the bus")
 	presenceEvery := fs.Duration("zmqcat-presence-every", presence.DefaultInterval, "presence announcement interval")
-	var allow stringList
-	fs.Var(&allow, "tailcat-allow", "repeatable nodekey:… allowlist (maps to tailcat serve --allow)")
 	fs.SetOutput(os.Stderr)
 	if err := fs.Parse(args); err != nil {
 		return serveOpts{}, err
 	}
 	opts := serveOpts{
-		Bind: *bind, Token: *token, Tailcat: *tailcat,
-		Allow: append([]string(nil), allow...), ZMQCat: *zmqEnabled,
+		Bind: *bind, Token: *token, ZMQCat: *zmqEnabled,
 		ZMQListen: *zmqListen, ZMQService: strings.TrimSpace(*zmqService),
 		ZMQWorkers: *zmqWorkers, NoPresence: *noPresence, PresenceEvery: *presenceEvery,
-	}
-	if len(opts.Allow) > 0 && !opts.Tailcat {
-		return serveOpts{}, fmt.Errorf("--tailcat-allow requires --tailcat")
 	}
 	if opts.ZMQCat && opts.ZMQService == "" {
 		return serveOpts{}, errNoZMQService
@@ -170,42 +148,11 @@ func runServe(args []string) int {
 		}
 	}
 
-	if opts.Tailcat {
-		ov, err := attachOverlay(os.Stderr, overlay.Config{LocalAddr: actual, Allow: opts.Allow})
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "huginn: %v\n", err)
-			return 1
-		}
-		defer ov.Close()
-	}
-
 	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 		fmt.Fprintf(os.Stderr, "huginn: %v\n", err)
 		return 1
 	}
 	return 0
-}
-
-// newOverlay is the Tailcat server factory. Tests replace it so they never
-// contact a live DERP.
-var newOverlay = overlay.New
-
-func attachOverlay(stderr io.Writer, cfg overlay.Config) (overlay.Server, error) {
-	ov, err := newOverlay(cfg)
-	if err != nil {
-		return nil, err
-	}
-	if err := ov.Start(); err != nil {
-		_ = ov.Close()
-		return nil, fmt.Errorf("tailcat: %w", err)
-	}
-	fmt.Fprintf(stderr, "huginn: tailcat overlay ephemeral key connblob %s\n", ov.ConnBlob())
-	if len(cfg.Allow) == 0 {
-		fmt.Fprintf(stderr, "huginn: tailcat: no --tailcat-allow; ConnBlob is a capability to reach the socket; sidecar token still required\n")
-	} else {
-		fmt.Fprintf(stderr, "huginn: tailcat: allow %d client key(s)\n", len(cfg.Allow))
-	}
-	return ov, nil
 }
 
 func runList(args []string) int {
