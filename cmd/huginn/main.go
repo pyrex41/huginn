@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pyrex41/huginn/internal/adapter/tmux"
 	"github.com/pyrex41/huginn/internal/broker"
 	"github.com/pyrex41/huginn/internal/overlay"
 	"github.com/pyrex41/huginn/internal/presence"
@@ -32,6 +33,12 @@ func main() {
 		os.Exit(runList(os.Args[2:]))
 	case "rpc":
 		os.Exit(runRPC(os.Args[2:]))
+	case "shell":
+		os.Exit(runShell(os.Args[2:]))
+	case "connect":
+		os.Exit(runConnect(os.Args[2:]))
+	case "share":
+		os.Exit(runShare(os.Args[2:]))
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -42,15 +49,19 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `huginn — host sidecar for grokbot (five verbs)
+	fmt.Fprintf(os.Stderr, `huginn — host sidecar for grokbot (five session verbs, optional shell verbs)
 
 Usage:
   huginn serve [--bind 127.0.0.1:7419] [--token TOKEN] [--tailcat] [--tailcat-allow nodekey:…]
                [--zmqcat] [--zmqcat-listen ADDR] [--zmqcat-service NAME]
                [--zmqcat-workers N] [--zmqcat-no-presence]
+               [--shell] [--tmux-socket PATH]
   huginn list [--addr 127.0.0.1:7419] [--token TOKEN] [--liveness live|resumable]
               [--runtime grok|codex|claude] [--cwd PREFIX] [--limit N] [--cursor C]
   huginn rpc --token TOKEN [--addr 127.0.0.1:7419] METHOD [JSON_PARAMS]
+  huginn shell list|screen|send|keys|new|kill …   (huginn shell --help)
+  huginn connect [--peers FILE] [--shen PATH] [PEER [SESSION]]
+  huginn share --out INVITATION.json [--tmux-socket PATH] SESSION
 
 Environment:
   HUGINN_TOKEN   sidecar secret (required if --token is omitted)
@@ -59,6 +70,10 @@ serve binds loopback only. --tailcat is an optional userspace overlay
 (not a sixth verb): it prints a tc… ConnBlob to stderr. Anyone who dials
 the overlay still needs HUGINN_TOKEN. Without --tailcat-allow the ConnBlob
 is a capability to reach the socket.
+
+--shell registers the shell verb family (shell/list, screen, send, keys,
+new, kill) over the serving user's tmux server. shell/send is remote
+command execution as that user for anyone holding HUGINN_TOKEN.
 
 Grok attaches via ACP. Codex attaches as a second JSON-RPC client on a live
 app-server unix/loopback socket (codex --remote).
@@ -79,6 +94,8 @@ type serveOpts struct {
 	ZMQWorkers    int
 	NoPresence    bool
 	PresenceEvery time.Duration
+	Shell         bool
+	TmuxSocket    string
 }
 
 type stringList []string
@@ -101,6 +118,8 @@ func parseServe(args []string) (serveOpts, error) {
 	zmqWorkers := fs.Int("zmqcat-workers", defaultZMQWorkers, "concurrent zmqcat READY workers")
 	noPresence := fs.Bool("zmqcat-no-presence", false, "do not announce this sidecar on the bus")
 	presenceEvery := fs.Duration("zmqcat-presence-every", presence.DefaultInterval, "presence announcement interval")
+	shell := fs.Bool("shell", false, "register the tmux-backed shell verbs (shell/send is remote command execution)")
+	tmuxSocket := fs.String("tmux-socket", "", "tmux server socket (default: tmux's default for this user)")
 	var allow stringList
 	fs.Var(&allow, "tailcat-allow", "repeatable nodekey:… allowlist (maps to tailcat serve --allow)")
 	fs.SetOutput(os.Stderr)
@@ -112,6 +131,10 @@ func parseServe(args []string) (serveOpts, error) {
 		Allow: append([]string(nil), allow...), ZMQCat: *zmqEnabled,
 		ZMQListen: *zmqListen, ZMQService: strings.TrimSpace(*zmqService),
 		ZMQWorkers: *zmqWorkers, NoPresence: *noPresence, PresenceEvery: *presenceEvery,
+		Shell: *shell, TmuxSocket: *tmuxSocket,
+	}
+	if opts.TmuxSocket != "" && !opts.Shell {
+		return serveOpts{}, fmt.Errorf("--tmux-socket requires --shell")
 	}
 	if len(opts.Allow) > 0 && !opts.Tailcat {
 		return serveOpts{}, fmt.Errorf("--tailcat-allow requires --tailcat")
@@ -133,7 +156,15 @@ func runServe(args []string) int {
 		}
 		return 2
 	}
-	srv, err := broker.New(broker.Config{Bind: opts.Bind, Token: opts.Token})
+	cfg := broker.Config{Bind: opts.Bind, Token: opts.Token}
+	if opts.Shell {
+		if err := tmux.Available(); err != nil {
+			fmt.Fprintf(os.Stderr, "huginn: --shell: %v\n", err)
+			return 1
+		}
+		cfg.Shells = tmux.New(opts.TmuxSocket)
+	}
+	srv, err := broker.New(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "huginn: %v\n", err)
 		return 1
@@ -146,6 +177,9 @@ func runServe(args []string) int {
 	defer ln.Close()
 	actual := ln.Addr().String()
 	fmt.Fprintf(os.Stderr, "huginn: listening on %s token_present=%v\n", actual, strings.TrimSpace(opts.Token) != "")
+	if opts.Shell {
+		fmt.Fprintf(os.Stderr, "huginn: shell verbs on (tmux socket=%s); shell/send runs commands as this user\n", displayTmuxSocket(opts.TmuxSocket))
+	}
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -184,6 +218,13 @@ func runServe(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+func displayTmuxSocket(s string) string {
+	if s == "" {
+		return "default"
+	}
+	return s
 }
 
 // newOverlay is the Tailcat server factory. Tests replace it so they never

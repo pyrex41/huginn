@@ -5,6 +5,8 @@ with lib;
 {
   enable = mkEnableOption "the huginn MCP endpoint";
 
+  shellWrite = mkEnableOption "shell input, creation, and destruction on connected machines";
+
   package = mkOption {
     type = types.package;
     description = "huginn package providing huginn-mcp.";

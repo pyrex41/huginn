@@ -9,6 +9,8 @@
     ++ [ "--zmqcat-workers" (toString cfg.workers) ]
     ++ lib.optionals (!cfg.presence) [ "--zmqcat-no-presence" ]
     ++ lib.optionals cfg.presence [ "--zmqcat-presence-every" cfg.presenceEvery ]
+    ++ lib.optionals cfg.shell [ "--shell" ]
+    ++ lib.optionals (cfg.tmuxSocket != null) [ "--tmux-socket" cfg.tmuxSocket ]
     ++ cfg.extraArgs;
 
   mkMcpArgs = cfg:
@@ -16,6 +18,7 @@
     ++ [ "--zmqcat-listen" cfg.zmqcatListen ]
     ++ [ "--timeout" cfg.timeout ]
     ++ [ "--stale-after" cfg.staleAfter ]
+    ++ lib.optionals cfg.shellWrite [ "--shell-write" ]
     ++ cfg.extraArgs;
 
   mkMcpScript = { pkgs, lib, cfg }:

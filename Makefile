@@ -1,7 +1,12 @@
-.PHONY: test build vet
+.PHONY: test test-connect build vet
+
+SHEN ?= shen
 
 test:
 	go test ./...
+
+test-connect:
+	HUGINN_SHEN="$(SHEN)" go test ./cmd/huginn -run 'TestConnection' -count=1
 
 vet:
 	go vet ./...

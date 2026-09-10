@@ -31,7 +31,7 @@
 
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
-          packages = [ pkgs.go pkgs.gopls (zmqcatFor pkgs) ];
+          packages = [ pkgs.go pkgs.gopls pkgs.tmux pkgs.openssh (zmqcatFor pkgs) ];
         };
       });
 

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 )
@@ -20,13 +21,16 @@ func (s stubRoster) Has(svc string) bool {
 }
 
 type stubBus struct {
+	mu      sync.Mutex
 	replies map[string]string
 	errs    map[string]error
 	seen    []string
 }
 
 func (b *stubBus) rpc(ctx context.Context, service, method string, params map[string]any, timeout time.Duration) ([]byte, error) {
+	b.mu.Lock()
 	b.seen = append(b.seen, service)
+	b.mu.Unlock()
 	if err, ok := b.errs[service]; ok {
 		return nil, err
 	}

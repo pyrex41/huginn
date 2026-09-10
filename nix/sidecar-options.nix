@@ -35,6 +35,14 @@ with lib;
     description = "Loopback address for the HTTP JSON-RPC surface.";
   };
 
+  shell = mkEnableOption "tmux shell access (remote command execution for token/bus holders)";
+
+  tmuxSocket = mkOption {
+    type = types.nullOr types.str;
+    default = null;
+    description = "tmux server socket; requires shell = true. Null uses the user's default socket.";
+  };
+
   zmqcatListen = mkOption {
     type = types.str;
     default = "unix:///tmp/zmqcat.sock";

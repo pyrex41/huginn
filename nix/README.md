@@ -12,3 +12,14 @@
 
 The option sets live in their own files because three backends expose the
 same options; duplicating them is how they drift.
+
+`services.huginn.shell` enables the six tmux verbs; `tmuxSocket` selects a
+nondefault socket. `services.huginn-mcp.shellWrite` separately enables the
+write tools on the hub. Both switches default to false.
+
+The package makes tmux and OpenSSH available to `huginn`. The human
+`huginn connect` command additionally needs Shen/Go (`HUGINN_SHEN` or
+`--shen`). Tailcat is built in: `huginn share` needs no SSH server or
+separate Tailcat CLI. Shen is not required for sharing, the sidecar, or
+MCP service. Peers and credentials belong in
+the user's config, not the Nix store.

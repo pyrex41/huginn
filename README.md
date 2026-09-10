@@ -1,14 +1,15 @@
 # huginn
 
-A host sidecar so grokbot can attach to live Claude Code, Codex, and Grok
-Build sessions as a structured client.
+Two small, separate ways to reach your work:
 
-Huginn does not own a PTY, does not paint a terminal, and does not type
-keystrokes into a TUI. It discovers agent sessions on a machine, attaches
-through each runtime's native control plane, and exposes one small contract
-to grokbot: list, watch, prompt, interrupt, permission verdict.
+- **Human terminal:** `huginn connect` picks a host and tmux session, then
+  runs a real tmux client locally or over SSH/Tailcat. Shen controls the
+  connection lifecycle; tmux owns the terminal and its surviving sessions.
+- **Machine API:** `huginn serve` exposes native coding-agent sessions to
+  grokbot, plus six optional tmux operations for tools. The agent adapters
+  still use native protocols, never terminal scraping.
 
-That is the whole product.
+No terminal emulator, pane proxy, transcript store, or mandatory hub.
 
 ## Install
 
@@ -48,6 +49,151 @@ or clone and `make build`, which produces all three binaries. Dependencies
 are vendored, so a build fetches nothing. The Nix modules pass ordinary flags; `huginn serve --help` and
 `huginn-mcp --help` show the same options under different names.
 
+## Connect to tmux
+
+The human path needs **tmux** on the session host and a
+[Shen/Go](https://github.com/pyrex41/shen-go) executable with its `script`
+launcher. Put it on PATH as `shen`, or set `HUGINN_SHEN` to its absolute
+path on the connecting machine. Shen is needed only for `connect`, not
+for sharing, serving, or calling RPC. Tailcat is built into Huginn;
+neither SSH nor a separate Tailcat installation is needed for sharing.
+
+For local use, no configuration or sidecar is necessary:
+
+```sh
+tmux new-session -d -s work
+huginn connect local work
+```
+
+For a host picker, create `~/.config/huginn/peers.json` (or
+`$XDG_CONFIG_HOME/huginn/peers.json`):
+
+```json
+{
+  "local": {},
+  "studio": { "ssh": "reuben@studio" },
+  "build": { "ssh": "build-box", "socket": "/tmp/build-tmux.sock" }
+}
+```
+
+```sh
+huginn connect                  # pick host, then session
+huginn connect studio           # pick a session on studio
+huginn connect studio work      # attach directly to that existing session
+huginn connect --peers ./peers.json studio work
+```
+
+An empty peer object means local tmux. `ssh` is an SSH destination or an
+alias from `~/.ssh/config`; `socket` optionally selects that host's tmux
+server. Unknown fields are errors. A missing *default* file offers only
+`local`; a missing explicit file or unknown peer is an error, never a
+fallback to a different host.
+
+SSH keeps its normal key authentication and host-key checks. Establish
+and verify the connection with ordinary `ssh` first: the picker uses
+`BatchMode=yes`, so it never hangs on a password or unknown-host prompt.
+
+### Direct Tailcat: no SSH, no tailnet
+
+On the host, share an existing session:
+
+```sh
+huginn share --out /tmp/work-invite.json work
+```
+
+Leave that command running. Send the invitation file to the other machine
+using a private, trusted channel. On that machine, with Huginn and Shen/Go:
+
+```sh
+chmod 600 ./work-invite.json
+huginn connect --peers ./work-invite.json shared
+```
+
+The invitation contains a Tailcat connection blob and a random 256-bit
+authorization token. **Anyone holding it can control your shell as you.**
+It is written mode 0600 and never overwrites an existing file. Do not
+commit it or paste it into a public chat. Ctrl-C on the sharing host
+revokes the invitation, disconnects clients, and removes the original
+invitation file; the tmux session survives. Start sharing again to issue
+a new invitation. A crash may leave a stale file; remove it before reuse.
+
+This is a PTY byte stream directly over Tailcat's encrypted transport,
+with window resizing, bounded messages, and heartbeat timeouts. There is
+no SSH process, SSH server, port 22, Tailscale account, local TCP listener,
+or Huginn broker involved. Only the shared session is offered by the
+picker, but **this is not a sandbox**: an interactive shell and tmux can
+access other resources belonging to the serving user. Use a separate
+OS user/container when sharing with someone you do not fully trust.
+
+`ssh` peers remain an optional alternative requiring OpenSSH. Mixing
+`ssh` or a client-selected `socket` with a Tailcat invitation is rejected.
+
+### LLM access: the same invitation, plain CLI
+
+An LLM with a command-execution tool can use the same invitation without
+MCP, a sidecar/bus, Shen, or a terminal on its machine. Both machines need
+the updated Huginn build; restart older `huginn share` processes and
+transfer the newly generated invitation.
+
+```sh
+export HUGINN_PEERS=./work-invite.json
+huginn shell list
+huginn shell screen
+huginn shell send --enter 'pwd'
+huginn shell screen
+huginn shell keys C-c
+```
+
+Alternatively pass `--peers ./work-invite.json` to each subcommand.
+`--peer` defaults to `shared`. `--name` is unnecessary; if provided it
+must match the shared session. `--pane` accepts a pane from `shell list`
+or a window/pane index inside that session. Unrelated sessions/panes and
+the `new`/`kill` operations are rejected on this path.
+
+Commands print JSON with a `result` field; runtime failures print an
+`error` object and exit nonzero. Flag/usage errors go to stderr. For
+example, `huginn shell screen | jq -r '.result.text'` shows the screen.
+Screens are capped at 128 KiB; `--lines` permits 0–5000 scrollback lines.
+Requests are capped at 32 KiB and each call has a 30-second deadline.
+
+For a best-effort stale-screen check, pass `.result.gen` from a screen
+read to `send`/`keys` using `--expect-gen`. This is a visible-text digest,
+not a lock. Send acknowledges input, **not command completion**; read
+the screen afterward. A failed write may already have executed. Huginn
+does not retry/replay writes; inspect before deciding what to do next.
+The invitation remains full shell access, not a sandbox or read-only grant.
+
+### Disconnect means disconnect
+
+Detach with tmux's normal binding (`Ctrl-b d` by default). Huginn exits;
+the tmux session stays alive. Connect again to resume it.
+
+On an unsuccessful attachment or a lost connection, Huginn asks before
+retrying. A retry lists sessions afresh and checks the selected session's
+ID, server PID, and creation time. It does not create a replacement or
+switch to another session with the same name. Input is never buffered or
+replayed by Huginn. A broken connection cannot tell you whether the last
+keystroke reached the remote program; inspect the terminal after reconnecting.
+
+The complete lifecycle is in `cmd/huginn/connect.shen`: a pure transition
+function and a small event loop. Go only performs its `list`, `attach`,
+`retry`, and `stop` effects. There is no second state machine in Go.
+
+```sh
+make test-connect SHEN=/path/to/shen
+```
+
+This runs the real Shen controller tests, including disconnect/retry and
+replacement-session refusal. With tmux on PATH it also runs a real CLI
+attach, killed-client recovery, detach, and reattach test against an
+isolated tmux server. It does not
+contact a remote SSH host or a public Tailcat relay by default. To test
+the actual Tailcat transport (two peers on this machine, public relay):
+
+```sh
+HUGINN_LIVE_TAILCAT=1 go test ./cmd/huginn -run '^TestTerminalLiveTailcat$' -v
+```
+
 ## Why this exists
 
 Claude Code, Codex, and Grok Build already speak machine protocols:
@@ -62,8 +208,8 @@ Wrapping those TUIs in a multiplexer treats an agent conversation as a
 screenful of cells and fights exclusive keyboard leases. Huginn talks to the
 agent, not the terminal emulator.
 
-shenmux remains the right tool for an arbitrary shell. It is the wrong layer
-for this.
+For an arbitrary shell, the layer is tmux, and huginn wraps it as a second,
+separate verb family (below). That family is not how huginn reaches agents.
 
 ## What a session is here
 
@@ -99,6 +245,10 @@ be looser.
 
 Nothing else is in the pipe. If grokbot can do the job without a piece, that
 piece does not live here.
+
+Beside the pipe, and typed apart from it, sits the **shell family**: six
+verbs over the serving user's tmux server, off by default. See
+[Shells](#shells).
 
 ## Broker contract
 
@@ -148,6 +298,70 @@ Adapters map:
 
 Lossy mappings stay lossy in the type, not hidden. A Claude channel attach
 does not pretend to be `session/load`.
+
+## Shells
+
+`huginn serve --shell` registers a second verb family. A **shell** is a tmux
+session on the host. It is not a session in the sense above: no runtime, no
+transcript, no capabilities, and no verb takes both kinds of name. The
+adapter is `internal/adapter/tmux`, named for what it wraps.
+
+```
+shell/list    {host?, limit?, cursor?}                       -> shells[], total, nextCursor
+shell/screen  {host, name, pane?, lines?}                    -> text, cursor{x,y}, gen
+shell/send    {host, name, pane?, text, enter?, expect_gen?} -> gen_before, gen_after
+shell/keys    {host, name, pane?, keys[], expect_gen?}       -> gen_before, gen_after
+shell/new     {host, name, cwd?, command?}                   -> row
+shell/kill    {host, name}                                   -> ok
+```
+
+A row names host, name, windows, panes (each with its tmux `%id`, index,
+cwd, and running command), cwd, attached, created. Rules:
+
+- Every call needs `HUGINN_TOKEN`, `shell/list` included. Nothing in this
+  family is looser than `session/list`.
+- Discovery runs `tmux list-sessions -F` with a format string the adapter
+  chose and parses fields. No server running is an empty list, not an error.
+  tmux missing from `PATH` fails `serve --shell` at startup.
+- `shell/screen` is `capture-pane` of one pane, with 0–5000 scrollback
+  lines and a 128 KiB output cap. Oversized output is an error, not a
+  silently truncated screen. `gen` hashes the visible text, independent
+  of the requested scrollback. `shell/send` (`send-keys -l`, literal) and `shell/keys` (named keys:
+  `Enter`, `C-c`, `Escape`, `Up`) take an optional `expect_gen` and refuse
+  with a typed error (`-32012`, data carries `gen_before`) when the screen
+  text differs from what the caller read. This is a best-effort stale-screen
+  check, **not** a revision counter, lock, or atomic compare-and-swap.
+  Repeated identical prompts are indistinguishable. The result says what tmux accepted and
+  nothing more: `gen_after` is a second capture, not proof the program in
+  the pane saw a keystroke.
+- Input resolves the active pane to its `%id` once; text and Enter are
+  submitted in one tmux command sequence. Humans can still type or change
+  the screen concurrently. Failed or timed-out writes have an unknown
+  outcome and must not be automatically retried.
+- `shell/list` pages with the same keyset cursor, `total`, and `nextCursor`
+  as `session/list`.
+- `--tmux-socket` overrides the server; the default is tmux's default for
+  the serving user.
+- A caller must name a shell to reach it. Nothing in the session family
+  resolves to a shell, and a coding agent running inside a shell is a
+  process in a pane, not a session row.
+
+Surfaced wherever the session verbs are: broker JSON-RPC, `huginn shell
+list|screen|send|keys|new|kill`, the zmqcat worker (a hub reaches a
+machine's shells the same way it reaches its sessions), and `huginn-mcp`
+(`shell_list`, `shell_screen` always; `shell_send`, `shell_keys`,
+`shell_new`, `shell_kill` behind `--shell-write`). The Tailcat overlay
+forwards TCP to the loopback port and never looks at a method name, so it
+needed no change.
+
+`shell/send` is remote command execution as the serving user for anyone
+holding the token. That is the whole reason it is off by default; INSTALL.md
+says it again.
+
+There is no `shell/tap` or persistent `shell/history`. Use
+`shell/screen {lines: N}` for bounded tmux scrollback. If you need a
+durable build log, make the command write a log; Huginn does not implement
+recording, rotation, byte cursors, or ANSI replay.
 
 ## Runtime rules
 
@@ -247,6 +461,8 @@ grokbot can:
 - inject a follow-up without sitting in the TUI
 - approve or deny a tool prompt when the adapter supports it
 - resume a disk session into a live adapter when asked
+- with `--shell`: list a machine's tmux shells, read a pane, type a command
+  or a key into a named shell, open or kill one
 
 grokbot cannot:
 
@@ -255,6 +471,9 @@ grokbot cannot:
 - silently auto-approve every tool (permission policy is explicit per
   attach, default deny-until-configured)
 - drive a session whose runtime is not installed on that host
+- read a shell beyond what tmux keeps in that pane's history, hold a lease
+  on a shell, attach to one, or treat an agent running in a shell as an
+  agent session
 
 ## Try the zmqcat mailbox transport
 
@@ -329,11 +548,16 @@ Run it beside `zmqcat serve` on the orchestration box:
 HUGINN_MCP_TOKEN=… huginn-mcp --bind 127.0.0.1:7420
 ```
 
-Two tools, both read-only:
+Two session tools, both read-only:
 
 - `machines_list` — who is on the bus, from presence
 - `sessions_list` — `session/list` against one machine, or **every** machine
   at once when `machine` is omitted
+
+Plus the shell tools for machines running `huginn serve --shell`:
+`shell_list` (fans out like `sessions_list`) and `shell_screen` always;
+`shell_send`, `shell_keys`, `shell_new`, `shell_kill` only with
+`--shell-write`, for the reason in the next section.
 
 Fan-out is per-machine tolerant: one unreachable host comes back as a row
 with an `error`, not a failed call, so a single dead laptop cannot blind the
@@ -372,7 +596,7 @@ sidecar. The HTTP surface keeps its own token check either way.
 
 | Repo | Owns | Huginn does with it |
 | --- | --- | --- |
-| **shenmux** | PTY, screen, exclusive input lease | Nothing. Different pipe. |
+| **shenmux** | PTY, screen, exclusive input lease | Nothing. The shell family wraps tmux directly and imports no terminal emulator; the only PTY is tmux's own. |
 | **command-center** / **shen-command-center** | Work engine, harness isolation, take/lease, policy | Huginn is not a control plane and does not schedule work. A later consumer may call huginn. That consumer is not this repo. |
 | **garmr** | Capability gateway | Authz for "may this principal prompt session X" can sit in front. Huginn does not reimplement it. |
 | Runtime CLIs | Claude / Codex / Grok | Huginn is a client of their protocols. |
@@ -384,8 +608,12 @@ product, it is in the wrong repository.
 
 Each names the owner instead. Checkable in a PR.
 
-**R1. No PTY, no terminal emulator, no keystroke injection.**
-Those are shenmux. A "fallback: type into tmux" adapter is a bug.
+**R1. No PTY, no terminal emulator, no keystroke injection into an agent.**
+Huginn never wraps Claude, Codex, or Grok in a PTY and never types into an
+agent TUI; a "fallback: type into the agent's tmux pane" adapter is a bug.
+The shell family is a separate pipe whose only PTY is tmux's own: a caller
+must name a shell to reach it, the session verbs never resolve to one, and
+an agent found running inside a shell is not thereby a session.
 
 **R2. No reverse-engineered Claude Remote Control.**
 Channels for live Claude TUIs. Official Agent SDK / print-mode only for
@@ -460,7 +688,8 @@ into a PTY, v1 has failed.
 
 Done: the five verbs over loopback HTTP; the three adapters; `session/list`
 filtered and paged; zmqcat as an optional transport; presence; a read-only
-`huginn-mcp` across the bus; Nix packaging and service modules.
+`huginn-mcp` across the bus; Nix packaging and service modules; six opt-in
+tmux verbs; and a Shen-driven native tmux connector with explicit peers.
 
 Not done, in the order it matters:
 
@@ -482,12 +711,14 @@ Not done, in the order it matters:
 ```
 README.md            this document; the product is the pipe it describes
 INSTALL.md           hub, then machines, then harnesses
-cmd/huginn/          sidecar + debug CLI
+cmd/huginn/          sidecar, RPC CLI, and native tmux connector
+cmd/huginn/connect.shen  connection state machine; embedded at build time
 cmd/huginn-mcp/      read-only MCP endpoint across the bus
 cmd/huginn-channel/  Claude channel plugin (injects into one live TUI)
-internal/broker/     the five verbs
+internal/broker/     the five verbs, plus the shell family when enabled
 internal/overlay/    optional Tailcat transport (not a verb)
 internal/adapter/    grok, codex, claude — native protocols only
+internal/adapter/tmux/  the shell family: tmux, and only tmux
 internal/discover/   live vs resumable probes
 internal/presence/   who is on the bus
 nix/                 packaging and the service modules
