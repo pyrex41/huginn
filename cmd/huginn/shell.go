@@ -11,7 +11,7 @@ import (
 )
 
 func shellUsage() {
-	fmt.Fprint(os.Stderr, `huginn shell — tmux commands over a Tailcat invitation or sidecar
+	fmt.Fprint(os.Stderr, `huginn shell — tmux commands against a huginn sidecar
 
 Usage:
   huginn shell list   [--host H] [--limit N] [--cursor C]
@@ -22,9 +22,7 @@ Usage:
   huginn shell kill   --name NAME
 
 Common flags: --addr 127.0.0.1:7419 --token TOKEN (or HUGINN_TOKEN)
-Direct Tailcat: --peers INVITATION.json (or HUGINN_PEERS), --peer shared
-  list, screen, send, keys only; --name is optional and must match the share.
-  No sidecar, MCP, Shen, or terminal is needed. Flags precede TEXT/KEY arguments.
+  Flags precede TEXT/KEY arguments.
 
 A shell is a tmux session on the sidecar's machine, not a coding-agent
 session. send types TEXT literally; keys sends tmux key names (Enter, C-c,
@@ -56,56 +54,9 @@ func runShell(args []string) int {
 	cursor := fs.String("cursor", "", "continue from a previous nextCursor")
 	cwd := fs.String("cwd", "", "working directory for the new shell")
 	command := fs.String("command", "", "program to run instead of the login shell")
-	peersPath := fs.String("peers", os.Getenv("HUGINN_PEERS"), "Tailcat invitation file (or HUGINN_PEERS)")
-	peerName := fs.String("peer", "shared", "peer in the invitation file")
 	fs.SetOutput(os.Stderr)
 	fs.Usage = shellUsage
 	if err := fs.Parse(rest); err != nil {
-		return 2
-	}
-	if *peersPath != "" {
-		request := sharedShellRequest{Action: sub, Name: *name, Pane: *pane, Lines: *lines, Enter: *enter, ExpectGen: *expectGen}
-		if sub == "send" {
-			request.Text = strings.Join(fs.Args(), " ")
-		} else if sub == "keys" {
-			request.Keys = fs.Args()
-		} else if len(fs.Args()) != 0 {
-			fmt.Fprintln(os.Stderr, "huginn shell: unexpected positional arguments")
-			return 2
-		}
-		invalidFlag := ""
-		allowed := map[string]bool{"peers": true, "peer": true, "name": true}
-		if sub != "list" {
-			allowed["pane"] = true
-		}
-		if sub == "screen" {
-			allowed["lines"] = true
-		}
-		if sub == "send" {
-			allowed["enter"] = true
-		}
-		if sub == "send" || sub == "keys" {
-			allowed["expect-gen"] = true
-		}
-		fs.Visit(func(value *flag.Flag) {
-			if !allowed[value.Name] {
-				invalidFlag = value.Name
-			}
-		})
-		if invalidFlag != "" {
-			fmt.Fprintf(os.Stderr, "huginn shell: --%s is unavailable for this invitation command\n", invalidFlag)
-			return 2
-		}
-		return runSharedShell(*peersPath, *peerName, request)
-	}
-	peerSpecified := false
-	fs.Visit(func(value *flag.Flag) {
-		if value.Name == "peer" {
-			peerSpecified = true
-		}
-	})
-	if peerSpecified {
-		fmt.Fprintln(os.Stderr, "huginn shell: --peer requires --peers or HUGINN_PEERS")
 		return 2
 	}
 	params := map[string]any{}

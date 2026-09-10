@@ -93,14 +93,11 @@ To serve the machine's tmux shells as well, pass `--shell` (and
 `--tmux-socket PATH` if the server is not on tmux's default socket). This is
 off by default; read the trust note below before turning it on.
 The Nix equivalents are `services.huginn.shell = true` and optionally
-`services.huginn.tmuxSocket = "/path/to/socket"`. To expose shell writes
-through the MCP hub, separately enable `services.huginn-mcp.shellWrite`.
+`services.huginn.tmuxSocket = "/path/to/socket"`.
 
-For human terminal access alone, none of this hub setup is needed. See
-[Connect to tmux](README.md#connect-to-tmux): a peers file, Shen/Go, and
-tmux directly over Tailcat (`huginn share --out /tmp/invite.json SESSION`),
-or optionally ordinary SSH. No sidecar token or recording directory.
-Transfer the invitation privately: it grants shell access as the host user.
+Shell input is available via `huginn shell` against a sidecar with
+`--shell` enabled, using `--addr`/`--token`. No sidecar token is needed
+for local tmux.
 
 The machine also needs a local socket onto the hub's bus. Put the `tc…`
 token from step 1 in a file and join:
@@ -201,7 +198,5 @@ Read this before enabling it anywhere shared.
   runs any command, all as that user, for anyone who holds `HUGINN_TOKEN`
   (or, over zmqcat, anyone who can reach the socket). `shell/screen` reads
   whatever is on those screens. Enable it only where the token holders are
-  exactly the people who may already log in as that user. On the hub,
-  `huginn-mcp --shell-write` extends the same reach to every harness with
-  the MCP token; without it the endpoint only lists shells and reads
-  screens.
+  exactly the people who may already log in as that user. The MCP endpoint
+  does not expose shell tools.

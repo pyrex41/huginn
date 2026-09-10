@@ -1,4 +1,4 @@
-{ lib, buildGoModule, makeWrapper, tmux, openssh }:
+{ lib, buildGoModule, makeWrapper, tmux }:
 
 buildGoModule {
   pname = "huginn";
@@ -13,10 +13,10 @@ buildGoModule {
   subPackages = [ "cmd/huginn" "cmd/huginn-mcp" "cmd/huginn-channel" ];
 
   nativeBuildInputs = [ makeWrapper ];
-  nativeCheckInputs = [ tmux openssh ];
+  nativeCheckInputs = [ tmux ];
 
   postInstall = ''
-    wrapProgram $out/bin/huginn --suffix PATH : ${lib.makeBinPath [ tmux openssh ]}
+    wrapProgram $out/bin/huginn --suffix PATH : ${lib.makeBinPath [ tmux ]}
   '';
 
   ldflags = [ "-s" "-w" ];

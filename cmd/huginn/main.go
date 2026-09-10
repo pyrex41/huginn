@@ -35,10 +35,6 @@ func main() {
 		os.Exit(runRPC(os.Args[2:]))
 	case "shell":
 		os.Exit(runShell(os.Args[2:]))
-	case "connect":
-		os.Exit(runConnect(os.Args[2:]))
-	case "share":
-		os.Exit(runShare(os.Args[2:]))
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -60,8 +56,6 @@ Usage:
               [--runtime grok|codex|claude] [--cwd PREFIX] [--limit N] [--cursor C]
   huginn rpc --token TOKEN [--addr 127.0.0.1:7419] METHOD [JSON_PARAMS]
   huginn shell list|screen|send|keys|new|kill …   (huginn shell --help)
-  huginn connect [--peers FILE] [--shen PATH] [PEER [SESSION]]
-  huginn share --out INVITATION.json [--tmux-socket PATH] SESSION
 
 Environment:
   HUGINN_TOKEN   sidecar secret (required if --token is omitted)

@@ -18,7 +18,6 @@
     ++ [ "--zmqcat-listen" cfg.zmqcatListen ]
     ++ [ "--timeout" cfg.timeout ]
     ++ [ "--stale-after" cfg.staleAfter ]
-    ++ lib.optionals cfg.shellWrite [ "--shell-write" ]
     ++ cfg.extraArgs;
 
   mkMcpScript = { pkgs, lib, cfg }:

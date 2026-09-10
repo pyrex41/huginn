@@ -46,9 +46,6 @@ type server struct {
 	bus     busRPC
 	roster  rosterSource
 	timeout time.Duration
-	// shellWrite exposes shell_send, shell_keys, shell_new, shell_kill.
-	// Off by default: those are remote command execution on every machine.
-	shellWrite bool
 }
 
 type rosterSource interface {
@@ -106,18 +103,12 @@ func (s *server) initialize(params json.RawMessage) map[string]any {
 		"serverInfo":      map[string]any{"name": serverName, "version": serverVersion},
 		"instructions": "Read-only view of coding-agent sessions across every machine on this bus. " +
 			"Call machines_list to see which machines are reachable, then sessions_list to see their sessions. " +
-			"Ask for liveness=live to see what is running now; an unfiltered list is mostly historical. " +
-			"shell_list and shell_screen show plain shells (tmux sessions) on machines that serve them; a shell is not an agent session.",
+			"Ask for liveness=live to see what is running now; an unfiltered list is mostly historical.",
 	}
 }
 
 func (s *server) tools() []map[string]any {
-	out := tools()
-	out = append(out, shellReadTools()...)
-	if s.shellWrite {
-		out = append(out, shellWriteTools()...)
-	}
-	return out
+	return tools()
 }
 
 func tools() []map[string]any {
@@ -159,12 +150,7 @@ func (s *server) callTool(ctx context.Context, params json.RawMessage) map[strin
 		return toolResult(map[string]any{"machines": s.roster.Machines()})
 	case "sessions_list":
 		return s.sessionsList(ctx, in.Args)
-	case "shell_list":
-		return s.shellList(ctx, in.Args)
 	default:
-		if method, ok := s.shellMethods()[in.Name]; ok {
-			return s.shellOne(ctx, method, in.Args)
-		}
 		return toolError("unknown tool " + in.Name)
 	}
 }
