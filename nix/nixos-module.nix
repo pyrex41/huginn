@@ -42,6 +42,9 @@ in
     # Independent of huginn / huginn-mcp: join-only machines still need the path.
     (lib.mkIf config.services.zmqcat.enable {
       services.zmqcat.listen = lib.mkDefault zmqListen;
+      # zmqcat's module uses 0077 (0700 socket). Group write so the sidecar
+      # user and DynamicUser MCP can connect; not 0000 (world).
+      systemd.services.zmqcat.serviceConfig.UMask = lib.mkForce "0007";
     })
     (lib.mkIf cfg.enable {
       services.huginn.zmqcatListen = lib.mkDefault (
@@ -51,6 +54,9 @@ in
         assertion = cfg.user != "root";
         message = "services.huginn.user must be the human whose sessions it attaches to, not root.";
       }];
+      users.users.${cfg.user}.extraGroups = lib.mkIf config.services.zmqcat.enable [
+        config.services.zmqcat.group
+      ];
       systemd.services.huginn = {
         description = "huginn session sidecar";
         wantedBy = [ "multi-user.target" ];
@@ -62,6 +68,9 @@ in
           RestartSec = 2;
           User = cfg.user;
           NoNewPrivileges = true;
+          SupplementaryGroups = lib.mkIf config.services.zmqcat.enable [
+            config.services.zmqcat.group
+          ];
         };
       };
     })
@@ -84,6 +93,9 @@ in
           ProtectSystem = "strict";
           ProtectHome = true;
           PrivateTmp = lib.mkDefault true; # socket is /run/zmqcat, not /tmp
+          SupplementaryGroups = lib.mkIf config.services.zmqcat.enable [
+            config.services.zmqcat.group
+          ];
         };
       };
     })

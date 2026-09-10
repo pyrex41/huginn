@@ -108,8 +108,14 @@ Same machine as the hub? Skip the join and set
 `services.huginn.zmqcatListen` must equal `services.zmqcat.listen`. The
 modules default both to `unix:///run/zmqcat/bus.sock` on Linux and
 `unix:///var/lib/zmqcat/bus.sock` on Darwin (directory 0755 so the user
-sidecar can traverse). zmqcat creates the socket with `net.Listen`; if you
-need a 0600 mode, file that on zmqcat.
+sidecar can traverse). zmqcat creates the socket with `net.Listen`. On
+NixOS, huginn sets the bus `UMask` to `0007` (group-writable, not world);
+the NixOS sidecar user is added to `services.zmqcat.group` automatically.
+home-manager cannot set that — add it on the system:
+
+```nix
+users.users.<you>.extraGroups = [ "zmqcat" ];
+```
 
 ---
 
@@ -141,6 +147,7 @@ calls `machines_list`, then `sessions_list`, and gets every machine at once.
 
 ```sh
 # hub: are machines announcing themselves?
+# Linux; Darwin: unix:///var/lib/zmqcat/bus.sock
 zmqcat sub --listen unix:///run/zmqcat/bus.sock huginn.presence.
 
 # hub: does the MCP endpoint answer?

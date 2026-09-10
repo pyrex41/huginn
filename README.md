@@ -247,8 +247,9 @@ HUGINN_TOKEN=dev-secret huginn serve --zmqcat \
 
 Pass `--listen` / `--zmqcat-listen` explicitly on both sides. zmqcat's CLI
 defaults to `unix:///tmp/zmqcat-<uid>.sock` while the Nix modules default to
-`unix:///tmp/zmqcat.sock`; if the two disagree they miss each other with no
-error.
+`unix:///run/zmqcat/bus.sock` on Linux and `unix:///var/lib/zmqcat/bus.sock`
+on Darwin; if the two disagree they miss each other with no error. See
+INSTALL.md for the deployed paths.
 
 `--zmqcat-workers` (default 4) sets how many requests are served concurrently;
 each worker holds its own zmqcat session, because a blocking READY occupies
