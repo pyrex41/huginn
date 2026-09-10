@@ -47,6 +47,10 @@ func TestZMQWorkerRejectsWatchStream(t *testing.T) {
 	for _, payload := range []string{
 		`{"jsonrpc":"2.0","id":8,"method":"session/watch","params":{}}`,
 		`{"jsonrpc":"2.0","id":8,"method":"session/watch","params":{"snapshot":false}}`,
+		`{"jsonrpc":"2.0","id":8,"method":"session/watch","params":{"snapshot":"true"}}`,
+		`{"jsonrpc":"2.0","id":8,"method":"session/watch","params":{"snapshot":1}}`,
+		`{"jsonrpc":"2.0","id":8,"method":"session/watch","params":{"snapshot":null}}`,
+		`{"jsonrpc":"2.0","id":8,"method":"session/watch","params":[]}`,
 	} {
 		got := w.dispatch([]byte(payload))
 		var out struct {

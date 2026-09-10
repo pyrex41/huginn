@@ -109,7 +109,7 @@ type WatchRequest struct {
 	SessionID       string `json:"sessionId"`
 	Resume          bool   `json:"resume,omitempty"`
 	PermissionRelay bool   `json:"permissionRelay,omitempty"`
-	// Snapshot drains the current buffer and closes. Default is a live stream.
+	// Snapshot copies the in-memory buffer and closes. It does not drain. Default is a live stream.
 	Snapshot bool `json:"snapshot,omitempty"`
 }
 
