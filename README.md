@@ -249,8 +249,8 @@ HUGINN_TOKEN=dev-secret huginn serve --zmqcat \
 Pass `--listen` / `--zmqcat-listen` explicitly on both sides. zmqcat's CLI
 defaults to `unix:///tmp/zmqcat-<uid>.sock` while the Nix modules default to
 `unix:///run/zmqcat/bus.sock` on Linux and `unix:///var/lib/zmqcat/bus.sock`
-on Darwin. The sidecar listen must equal `services.zmqcat.listen`. If the
-two disagree they miss each other with no error. See INSTALL.md for the
+on Darwin. `services.huginn.zmqcatListen` must equal `services.zmqcat.listen`.
+If the two disagree they miss each other with no error. See INSTALL.md for the
 deployed paths.
 
 `--zmqcat-workers` (default 4) sets how many requests are served concurrently;
@@ -267,8 +267,8 @@ zmqcat req --listen unix:///tmp/zmqcat.sock huginn.local \
 
 For a remote trial, remove `--local` from `zmqcat serve`, run `zmqcat join`
 with the printed Tailcat token on the Huginn host, and point Huginn at that
-join process's local socket. Huginn itself does not need a Tailcat flag in
-this topology.
+join process's local socket. Huginn has no Tailcat flag; remote is
+`zmqcat join` plus `--zmqcat-listen` on the local socket.
 
 ### Presence
 
@@ -332,9 +332,8 @@ no such proof: the worker attaches the token to the request it hands its own
 broker, so **anything that can put a job on the service mailbox gets fully
 authenticated Huginn RPC**. zmqcat has no mailbox-level ACLs.
 
-The Nix modules use a per-role absolute listen path — Linux
-`unix:///run/zmqcat/bus.sock`, Darwin `unix:///var/lib/zmqcat/bus.sock` —
-and the sidecar's `--zmqcat-listen` must equal `services.zmqcat.listen`.
+`services.huginn.zmqcatListen` must equal `services.zmqcat.listen` — Linux
+`unix:///run/zmqcat/bus.sock`, Darwin `unix:///var/lib/zmqcat/bus.sock`.
 Whoever can open that socket can issue authenticated Huginn RPC. Do not
 enable it on a host where untrusted local users can reach the sidecar.
 The HTTP surface keeps its own token check either way. For the remote
@@ -443,7 +442,7 @@ Not done, in the order it matters:
    can reach that endpoint could otherwise drive every session on every
    machine. garmr's job; this endpoint is the chokepoint to put it in front
    of.
-2. **`session/watch` snapshot on the bus.** A bounded snapshot with a cursor
+2. **`session/watch` snapshot on the bus.** A bounded snapshot on the bus
    is the v1 path; pub/sub is deferred.
 3. **A `pi` adapter** — [#2](https://github.com/pyrex41/huginn/issues/2).
 4. **Cross-host Tailcat, actually exercised.** Everything so far has been
