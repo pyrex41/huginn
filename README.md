@@ -98,7 +98,8 @@ Proof of who is asking is required for (2)–(5). Discovery over local IPC may
 be looser.
 
 Nothing else is in the pipe. If grokbot can do the job without a piece, that
-piece does not live here.
+piece does not live here. Humans attach with ssh or tmux; Huginn does not
+wrap that.
 
 ## Broker contract
 
@@ -248,8 +249,9 @@ HUGINN_TOKEN=dev-secret huginn serve --zmqcat \
 Pass `--listen` / `--zmqcat-listen` explicitly on both sides. zmqcat's CLI
 defaults to `unix:///tmp/zmqcat-<uid>.sock` while the Nix modules default to
 `unix:///run/zmqcat/bus.sock` on Linux and `unix:///var/lib/zmqcat/bus.sock`
-on Darwin; if the two disagree they miss each other with no error. See
-INSTALL.md for the deployed paths.
+on Darwin. The sidecar listen must equal `services.zmqcat.listen`. If the
+two disagree they miss each other with no error. See INSTALL.md for the
+deployed paths.
 
 `--zmqcat-workers` (default 4) sets how many requests are served concurrently;
 each worker holds its own zmqcat session, because a blocking READY occupies
@@ -328,14 +330,15 @@ for it, being the one point every agent call passes through.
 Over HTTP, every caller proves it holds `HUGINN_TOKEN`. Over zmqcat there is
 no such proof: the worker attaches the token to the request it hands its own
 broker, so **anything that can put a job on the service mailbox gets fully
-authenticated Huginn RPC**. zmqcat has no mailbox-level ACLs, and its default
-sidecar is a unix socket at `/tmp/zmqcat-<uid>.sock` created with the ordinary
-umask.
+authenticated Huginn RPC**. zmqcat has no mailbox-level ACLs.
 
-Enabling `--zmqcat` therefore delegates authentication to whoever controls
-that socket and, for the remote topology, to the Tailcat overlay's `--allow`
-list. Do not enable it on a host where untrusted local users can reach the
-sidecar. The HTTP surface keeps its own token check either way.
+The Nix modules use a per-role absolute listen path — Linux
+`unix:///run/zmqcat/bus.sock`, Darwin `unix:///var/lib/zmqcat/bus.sock` —
+and the sidecar's `--zmqcat-listen` must equal `services.zmqcat.listen`.
+Whoever can open that socket can issue authenticated Huginn RPC. Do not
+enable it on a host where untrusted local users can reach the sidecar.
+The HTTP surface keeps its own token check either way. For the remote
+topology, join is further gated by zmqcat's `--allow` list.
 
 ## Relationship to other repos
 
@@ -390,6 +393,8 @@ for prompts and, if permission relay is on, for tool approval.
 - Loopback or private overlay only. No public listener.
 - Sidecar auth is a secret or device credential, not an unauthenticated
   local port. A Tailcat `tc…` token does not replace `HUGINN_TOKEN`.
+- The Nix wrapper cats `tokenFile` at exec. Rotate by replacing the file
+  and restarting the service; there is no rotation API.
 - Claude channel path must sender-allowlist. An ungated channel is prompt
   injection into the developer's session.
 - Permission relay is opt-in per session. Anyone who can send a verdict can
@@ -416,8 +421,8 @@ runtime, not a mock.
 4. **Sidecar contract** — one process, `session/list` across the three
    adapters, auth on the grokbot socket.
 5. **Cross-host** — registry of sidecars over Tailscale or an outbound
-   relay (optional Tailcat overlay is transport only). Last. Not a reason
-   to build a controller first.
+   relay (zmqcat join is transport only). Last. Not a reason to build a
+   controller first.
 
 Finite bar for v1: from grokbot, list sessions on one enrolled machine,
 watch a live Grok turn, inject a prompt into that turn, inject into a live
@@ -438,10 +443,8 @@ Not done, in the order it matters:
    can reach that endpoint could otherwise drive every session on every
    machine. garmr's job; this endpoint is the chokepoint to put it in front
    of.
-2. **`session/watch` over the bus.** It is a stream and does not fit one
-   req/rep frame. A bounded snapshot with a cursor suits agents; pub/sub on
-   `huginn.events.…` suits grokbot. Different consumers, different
-   transports.
+2. **`session/watch` snapshot on the bus.** A bounded snapshot with a cursor
+   is the v1 path; pub/sub is deferred.
 3. **A `pi` adapter** — [#2](https://github.com/pyrex41/huginn/issues/2).
 4. **Cross-host Tailcat, actually exercised.** Everything so far has been
    verified with two sidecars on one machine over a local socket.

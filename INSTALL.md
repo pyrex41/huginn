@@ -34,11 +34,14 @@ One box the machines can reach — a VPS, a NAS, the always-on desktop.
     enable = true;
     role = "serve";
     mailbox = "/var/lib/zmqcat/mailbox.json";   # jobs survive a restart
+    # Linux. Darwin: unix:///var/lib/zmqcat/bus.sock
+    listen = "unix:///run/zmqcat/bus.sock";
   };
 
   services.huginn-mcp = {
     enable = true;
     tokenFile = "/run/secrets/huginn-mcp-token";
+    zmqcatListen = "unix:///run/zmqcat/bus.sock";  # must equal services.zmqcat.listen
   };
 }
 ```
@@ -78,6 +81,8 @@ sidecar plus a system `zmqcat` join — leave `huginn-mcp` on the hub.
     enable = true;
     service = "h.studio";                        # this machine's name on the bus
     tokenFile = "${config.home.homeDirectory}/.config/huginn/token";
+    # must equal services.zmqcat.listen on this host
+    zmqcatListen = "unix:///run/zmqcat/bus.sock";
   };
 }
 ```
@@ -90,8 +95,9 @@ chmod 600 ~/.config/huginn/token
 
 `service` must be unique across the bus — it *is* the machine's address.
 
-The machine also needs a local socket onto the hub's bus. Put the `tc…`
-token from step 1 in a file and join:
+The machine also needs a local socket onto the hub's bus: a **system**
+zmqcat join, next to the **user** sidecar. Put the `tc…` token from step 1
+in a file and join:
 
 ```nix
 # NixOS, or nix-darwin with darwinModules.default
@@ -99,8 +105,13 @@ services.zmqcat = {
   enable = true;
   role = "join";
   tokenFile = "/run/secrets/zmqcat-join-token";
+  # Linux. Darwin: unix:///var/lib/zmqcat/bus.sock
+  listen = "unix:///run/zmqcat/bus.sock";
 };
 ```
+
+`services.huginn.zmqcatListen` must equal `services.zmqcat.listen`. If they
+disagree, the sidecar misses the bus with no error.
 
 Same machine as the hub? Skip the join and set
 `services.zmqcat.role = "serve"` with `local = true`.
@@ -183,13 +194,16 @@ The modules pass ordinary flags; `huginn serve --help` and
 Read this before enabling it anywhere shared.
 
 - **Tokens are paths, never literals.** Every `tokenFile` option takes a
-  path read at runtime. A string in your Nix config lands in the
-  world-readable store.
+  path. The Nix wrapper cats it at exec so the secret never lands in the
+  store. Rotate by replacing the file and restarting the service; there is
+  no rotation API.
 - **The bus has no mailbox ACLs.** Anything that can open the zmqcat socket
   can read and write every mailbox, and the sidecar attaches `HUGINN_TOKEN`
   to requests itself — so socket access is equivalent to authenticated
-  huginn RPC. Do not enable this on a host where untrusted local users can
-  reach that socket.
+  huginn RPC. Listen is a per-role absolute path (Linux
+  `unix:///run/zmqcat/bus.sock`, Darwin `unix:///var/lib/zmqcat/bus.sock`)
+  and must match `services.zmqcat.listen`. Do not enable this on a host
+  where untrusted local users can reach that socket.
 - **The MCP endpoint is read-only on purpose.** `prompt`, `interrupt`, and
   `permission` are not exposed. Anything reaching it could otherwise drive
   every session on every machine, and `session/permission` approves `Bash`
