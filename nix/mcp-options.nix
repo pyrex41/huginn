@@ -1,5 +1,5 @@
 # Options for the orchestration-side MCP endpoint.
-{ lib }:
+{ lib, zmqcatListenDefault ? "unix:///run/zmqcat/bus.sock" }:
 
 with lib;
 {
@@ -30,8 +30,11 @@ with lib;
 
   zmqcatListen = mkOption {
     type = types.str;
-    default = "unix:///tmp/zmqcat.sock";
-    description = "zmqcat bus socket to fan out over.";
+    # Absolute: lib.escapeShellArgs would bake %t / $XDG_RUNTIME_DIR as literals.
+    default = zmqcatListenDefault;
+    description = ''
+      zmqcat bus socket to fan out over. Must equal services.zmqcat.listen.
+    '';
   };
 
   timeout = mkOption {

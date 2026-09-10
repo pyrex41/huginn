@@ -1,6 +1,6 @@
 # Options for the machine-side sidecar, shared by the home-manager, NixOS,
 # and nix-darwin modules so they cannot drift.
-{ lib }:
+{ lib, zmqcatListenDefault ? "unix:///run/zmqcat/bus.sock" }:
 
 with lib;
 {
@@ -37,8 +37,12 @@ with lib;
 
   zmqcatListen = mkOption {
     type = types.str;
-    default = "unix:///tmp/zmqcat.sock";
-    description = "Local zmqcat sidecar socket to attach to.";
+    # Absolute: lib.escapeShellArgs would bake %t / $XDG_RUNTIME_DIR as literals.
+    default = zmqcatListenDefault;
+    description = ''
+      Local zmqcat sidecar socket to attach to. Must equal
+      services.zmqcat.listen; Huginn dials, it does not start zmqcat.
+    '';
   };
 
   workers = mkOption {

@@ -8,6 +8,7 @@ let
   system = pkgs.stdenv.hostPlatform.system;
   sidecarScript = hlib.mkSidecarScript { inherit pkgs lib; cfg = cfg; };
   mcpScript = hlib.mkMcpScript { inherit pkgs lib; cfg = mcp; };
+  zmqListen = "unix:///run/zmqcat/bus.sock";
 in
 {
   options.services.huginn = import ./sidecar-options.nix { inherit lib; } // {
@@ -38,7 +39,14 @@ in
   };
 
   config = lib.mkMerge [
+    # Independent of huginn / huginn-mcp: join-only machines still need the path.
+    (lib.mkIf config.services.zmqcat.enable {
+      services.zmqcat.listen = lib.mkDefault zmqListen;
+    })
     (lib.mkIf cfg.enable {
+      services.huginn.zmqcatListen = lib.mkDefault (
+        if config.services.zmqcat.enable then config.services.zmqcat.listen else zmqListen
+      );
       assertions = [{
         assertion = cfg.user != "root";
         message = "services.huginn.user must be the human whose sessions it attaches to, not root.";
@@ -58,6 +66,9 @@ in
       };
     })
     (lib.mkIf mcp.enable {
+      services.huginn-mcp.zmqcatListen = lib.mkDefault (
+        if config.services.zmqcat.enable then config.services.zmqcat.listen else zmqListen
+      );
       systemd.services.huginn-mcp = {
         description = "huginn MCP endpoint";
         wantedBy = [ "multi-user.target" ];
@@ -72,7 +83,7 @@ in
           NoNewPrivileges = true;
           ProtectSystem = "strict";
           ProtectHome = true;
-          PrivateTmp = lib.mkDefault false; # default bus socket lives in /tmp
+          PrivateTmp = lib.mkDefault true; # socket is /run/zmqcat, not /tmp
         };
       };
     })

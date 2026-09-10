@@ -66,7 +66,8 @@ Without it, the token alone is enough.
 ## 2. Each machine
 
 The sidecar reads *your* `~/.grok`, `~/.claude`, and `~/.codex`, so it runs
-as you, not as root. home-manager is the way in:
+as you, not as root. home-manager is the way in. The machine is a user
+sidecar plus a system `zmqcat` join — leave `huginn-mcp` on the hub.
 
 ```nix
 # home.nix
@@ -104,6 +105,12 @@ services.zmqcat = {
 Same machine as the hub? Skip the join and set
 `services.zmqcat.role = "serve"` with `local = true`.
 
+`services.huginn.zmqcatListen` must equal `services.zmqcat.listen`. The
+modules default both to `unix:///run/zmqcat/bus.sock` on Linux and
+`unix:///var/lib/zmqcat/bus.sock` on Darwin (directory 0755 so the user
+sidecar can traverse). zmqcat creates the socket with `net.Listen`; if you
+need a 0600 mode, file that on zmqcat.
+
 ---
 
 ## 3. Point your harnesses at it
@@ -134,7 +141,7 @@ calls `machines_list`, then `sessions_list`, and gets every machine at once.
 
 ```sh
 # hub: are machines announcing themselves?
-zmqcat sub --listen unix:///tmp/zmqcat.sock huginn.presence.
+zmqcat sub --listen unix:///run/zmqcat/bus.sock huginn.presence.
 
 # hub: does the MCP endpoint answer?
 curl -s -X POST http://127.0.0.1:7420/mcp \
