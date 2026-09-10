@@ -124,14 +124,14 @@ func (w *zmqWorker) dispatch(payload []byte) []byte {
 		JSONRPC string          `json:"jsonrpc"`
 		ID      json.RawMessage `json:"id"`
 		Method  string          `json:"method"`
+		Params  json.RawMessage `json:"params"`
 	}
 	if err := json.Unmarshal(payload, &envelope); err != nil || envelope.JSONRPC != "2.0" || envelope.Method == "" {
 		return marshalRPCError(envelope.ID, broker.CodeInvalidRequest, "invalid JSON-RPC request")
 	}
-	// session/watch is an NDJSON stream and does not fit one req/rep frame.
-	// It will move to zmqcat events; keep the HTTP streaming path meanwhile.
-	if envelope.Method == broker.MethodWatch {
-		return marshalRPCError(envelope.ID, broker.CodeInvalidRequest, "session/watch uses the HTTP streaming endpoint")
+	// A live watch is NDJSON and does not fit one req/rep frame.
+	if envelope.Method == broker.MethodWatch && !watchSnapshot(envelope.Params) {
+		return marshalRPCError(envelope.ID, broker.CodeInvalidRequest, "session/watch streaming is HTTP-only; pass snapshot=true for a bounded copy of the in-memory buffer (up to 256 events)")
 	}
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
@@ -165,6 +165,19 @@ func statusCode(status int) int {
 	default:
 		return broker.CodeInternalError
 	}
+}
+
+func watchSnapshot(params json.RawMessage) bool {
+	if len(params) == 0 {
+		return false
+	}
+	var p struct {
+		Snapshot bool `json:"snapshot"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return false
+	}
+	return p.Snapshot
 }
 
 func marshalRPCError(id json.RawMessage, code int, message string) []byte {

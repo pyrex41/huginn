@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pyrex41/huginn/internal/adapter"
 	"github.com/pyrex41/huginn/internal/broker"
+	"github.com/pyrex41/huginn/internal/discover"
 	"github.com/pyrex41/zmqcat"
 )
 
@@ -41,15 +43,114 @@ func TestZMQWorkerDispatchesJSONRPC(t *testing.T) {
 
 func TestZMQWorkerRejectsWatchStream(t *testing.T) {
 	w := &zmqWorker{handler: http.NotFoundHandler()}
-	got := w.dispatch([]byte(`{"jsonrpc":"2.0","id":8,"method":"session/watch","params":{}}`))
-	var out struct {
-		Error struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
+	wantMsg := "session/watch streaming is HTTP-only; pass snapshot=true for a bounded copy of the in-memory buffer (up to 256 events)"
+	for _, payload := range []string{
+		`{"jsonrpc":"2.0","id":8,"method":"session/watch","params":{}}`,
+		`{"jsonrpc":"2.0","id":8,"method":"session/watch","params":{"snapshot":false}}`,
+	} {
+		got := w.dispatch([]byte(payload))
+		var out struct {
+			Error struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(got, &out); err != nil {
+			t.Fatalf("payload %s: %v", payload, err)
+		}
+		if out.Error.Code != broker.CodeInvalidRequest {
+			t.Fatalf("code=%d payload=%s body=%s", out.Error.Code, payload, got)
+		}
+		if out.Error.Message != wantMsg {
+			t.Fatalf("message=%q payload=%s", out.Error.Message, payload)
+		}
 	}
-	if err := json.Unmarshal(got, &out); err != nil || out.Error.Code == 0 {
-		t.Fatalf("dispatch = %s, err=%v", got, err)
+}
+
+type fanoutAdapter struct {
+	bus      *adapter.Fanout
+	sessions []adapter.Session
+	last     adapter.WatchRequest
+}
+
+func (a *fanoutAdapter) Runtime() adapter.Runtime { return adapter.RuntimeGrok }
+func (a *fanoutAdapter) Name() string             { return "test-fanout" }
+func (a *fanoutAdapter) List(context.Context) ([]adapter.Session, error) {
+	return a.sessions, nil
+}
+func (a *fanoutAdapter) Prompt(context.Context, adapter.PromptRequest) (adapter.PromptResult, error) {
+	return adapter.PromptResult{}, nil
+}
+func (a *fanoutAdapter) Watch(_ context.Context, req adapter.WatchRequest) (<-chan adapter.Update, error) {
+	a.last = req
+	if req.Snapshot {
+		buf := a.bus.Snapshot()
+		ch := make(chan adapter.Update, len(buf)+1)
+		for _, u := range buf {
+			ch <- u
+		}
+		close(ch)
+		return ch, nil
+	}
+	return a.bus.Subscribe(context.Background()), nil
+}
+func (a *fanoutAdapter) Interrupt(context.Context, string) error { return nil }
+func (a *fanoutAdapter) Permission(context.Context, adapter.PermissionRequest) (adapter.PermissionResult, error) {
+	return adapter.PermissionResult{Outcome: adapter.OutcomeDeny}, nil
+}
+
+func TestZMQWorkerWatchSnapshot(t *testing.T) {
+	bus := adapter.NewFanout(0)
+	fake := &fanoutAdapter{
+		bus: bus,
+		sessions: []adapter.Session{{
+			ID: "sess-snap", Runtime: adapter.RuntimeGrok, Adapter: "test-fanout",
+			Liveness: adapter.LivenessLive,
+		}},
+	}
+	srv, err := broker.New(broker.Config{
+		Bind:  "127.0.0.1:0",
+		Token: "secret",
+		Host:  discover.NewWith(fake),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := &zmqWorker{token: "secret", handler: srv.Handler()}
+	req := []byte(`{"jsonrpc":"2.0","id":8,"method":"session/watch","params":{"sessionId":"sess-snap","snapshot":true}}`)
+
+	got := w.dispatch(req)
+	assertWatchUpdates(t, got, 0)
+	if !fake.last.Snapshot || fake.last.SessionID != "sess-snap" {
+		t.Fatalf("watch request %+v", fake.last)
+	}
+
+	bus.Push(adapter.Update{SessionID: "sess-snap", Kind: "agent_message_chunk"})
+	got = w.dispatch(req)
+	assertWatchUpdates(t, got, 1)
+	got = w.dispatch(req)
+	assertWatchUpdates(t, got, 1)
+}
+
+func assertWatchUpdates(t *testing.T, body []byte, n int) {
+	t.Helper()
+	var out struct {
+		Error  *struct{ Code int } `json:"error"`
+		Result struct {
+			Updates []json.RawMessage `json:"updates"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("body %s: %v", body, err)
+	}
+	if out.Error != nil {
+		t.Fatalf("unexpected error %s", body)
+	}
+	if out.Result.Updates == nil {
+		t.Fatalf("updates omitted: %s", body)
+	}
+	if len(out.Result.Updates) != n {
+		t.Fatalf("updates=%d want %d body=%s", len(out.Result.Updates), n, body)
 	}
 }
 
