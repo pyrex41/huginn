@@ -1,52 +1,73 @@
 # huginn
 
-A host sidecar so grokbot can attach to live Claude Code, Codex, and Grok
-Build sessions as a structured client.
+A host sidecar so grokbot (or any ACP/MCP client) can attach to live Claude
+Code, Codex, and Grok Build sessions as a structured client.
 
 Huginn does not own a PTY, does not paint a terminal, and does not type
 keystrokes into a TUI. It discovers agent sessions on a machine, attaches
-through each runtime's native control plane, and exposes one small contract
-to grokbot: list, watch, prompt, interrupt, permission verdict.
+through each runtime's native control plane, and exposes five verbs: list,
+watch, prompt, interrupt, permission verdict.
 
 That is the whole product.
 
 ## Install
 
-```nix
-# flake.nix — one input gets you huginn and the zmqcat bus it rides on
-inputs.huginn.url = "github:pyrex41/huginn";
+```sh
+HUGINN_TOKEN=$(openssl rand -hex 32)
+huginn serve --token "$HUGINN_TOKEN"
+# 127.0.0.1:7419
 ```
 
-Then one option per role:
-
-```nix
-# each machine, as the user whose sessions these are (home-manager)
-imports = [ inputs.huginn.homeManagerModules.default ];
-services.huginn = { enable = true; service = "h.studio"; tokenFile = "…"; };
-
-# the box that owns the bus
-# NixOS: inputs.huginn.nixosModules.default
-# macOS: inputs.huginn.darwinModules.default
-imports = [ inputs.huginn.nixosModules.default ];
-services.zmqcat = { enable = true; role = "serve"; };
-services.huginn-mcp = { enable = true; tokenFile = "…"; };
-```
-
-**[INSTALL.md](INSTALL.md) is the walkthrough** — hub first, then machines,
-then point your harnesses at one URL. It also covers what enabling this does
-to your trust boundary, which is worth reading before you turn it on.
-
-Without Nix:
+Share with a colleague on your WireGuard or Tailscale net:
 
 ```sh
-go install github.com/pyrex41/huginn/cmd/huginn@latest
-go install github.com/pyrex41/huginn/cmd/huginn-mcp@latest
-go install github.com/pyrex41/zmqcat/cmd/zmqcat@latest
+huginn serve --token "$HUGINN_TOKEN" --bind 10.8.0.2:7419
 ```
 
-or clone and `make build`, which produces all three binaries. Dependencies
-are vendored, so a build fetches nothing. The Nix modules pass ordinary flags; `huginn serve --help` and
-`huginn-mcp --help` show the same options under different names.
+Same process, same token, three doors:
+
+| Path | Who |
+| --- | --- |
+| `POST /` | JSON-RPC (the five verbs; `huginn list` / `huginn rpc`) |
+| `POST /mcp` | MCP harnesses |
+| `/acp` (WebSocket) or `huginn acp` (stdio) | any ACP client (grokbot, Zed, …) |
+
+```json
+{
+  "mcpServers": {
+    "huginn": {
+      "type": "http",
+      "url": "http://10.8.0.2:7419/mcp",
+      "headers": { "Authorization": "Bearer TOKEN" }
+    }
+  }
+}
+```
+
+ACP: `ws://10.8.0.2:7419/acp` with the same Bearer, or spawn `huginn acp`.
+
+Nix:
+
+```nix
+# flake.nix
+inputs.huginn.url = "github:pyrex41/huginn";
+
+# home-manager, as the user whose sessions these are
+imports = [ inputs.huginn.homeManagerModules.default ];
+services.huginn = {
+  enable = true;
+  tokenFile = "${config.home.homeDirectory}/.config/huginn/token";
+  # bind = "10.8.0.2:7419";  # omit for loopback
+};
+```
+
+Without Nix: `go install github.com/pyrex41/huginn/cmd/huginn@latest` (and
+`.../cmd/huginn-channel` if you want live Claude inject) or `make build`.
+**[INSTALL.md](INSTALL.md)** is the walkthrough.
+
+The token is the capability. Whoever can reach the bind and present it can
+prompt and approve tools on this host. Rotate by replacing the file and
+restarting; there is no rotation API.
 
 ## Why this exists
 
@@ -94,18 +115,16 @@ Five things, and only five:
 5. **Steer** — interrupt a turn; allow or deny a permission prompt when the
    runtime exposes that.
 
-Proof of who is asking is required for (2)–(5). Discovery over local IPC may
-be looser.
+Proof of who is asking is required for (2)–(5).
 
-Nothing else is in the pipe. If grokbot can do the job without a piece, that
-piece does not live here. Humans attach with ssh or tmux; Huginn does not
-wrap that.
+Nothing else is in the pipe. Humans attach with ssh or tmux; Huginn does not
+wrap that. Network is the operator's overlay.
 
 ## Broker contract
 
-One JSON-RPC (or equivalent) surface that grokbot speaks. Internally
-ACP-shaped is the least-wrong common language. Exact methods can move; the
-verbs cannot:
+JSON-RPC on `POST /`. ACP on `/acp` is the same verbs in ACP names
+(`session/list`, `session/load`, `session/prompt`, `session/update`,
+`session/cancel`). MCP tools on `/mcp` map 1:1.
 
 ```
 session/list
@@ -117,29 +136,26 @@ session/permission   # allow | deny, only when the adapter advertised it
 
 A list row names at least: host, runtime (`grok` | `codex` | `claude`),
 session id, cwd, title, live/resumable, adapter, capabilities
-(`prompt`, `watch`, `interrupt`, `permission`).
+(`prompt`, `watch`, `interrupt`, `permission`). `join` is `none` when
+nothing on this host can attach (leaderless Grok TUI, Claude without the
+channel plugin, Codex without an app-server).
 
-`session/list` filters and pages, because a host accumulates every resumable
-conversation its runtimes ever wrote — thousands of rows, of which a handful
-are live:
+`session/list` filters and pages:
 
 ```
 {"liveness":"live","runtime":"grok","cwd":"/path/prefix","limit":200,"cursor":"…"}
 ```
 
-`liveness`, `runtime`, and `cwd` are optional filters; `limit` defaults to 200
-and caps at 1000. The result carries `total` (everything matching the filter,
-not just this page) and `nextCursor` (empty on the last page). A caller that
-ignores both sees a short list, never a silently truncated one. The cursor is
-keyset, not an offset, so a session appearing or vanishing mid-walk does not
-shift the rows around it.
+`limit` defaults to 200 and caps at 1000. The result carries `total` and
+`nextCursor`. Ask for `{"liveness":"live"}` when you mean what is running
+now. An unfiltered list is history.
 
-Ask for `{"liveness":"live"}` when you mean "what is running right now" — that
-is a small response on any host. An unfiltered list is history.
+ACP `session/new` is refused: spawn is not join-live-TUI. `session/load` of
+a `join=none` row fails with the same honest error prompt would.
 
 Adapters map:
 
-- Grok → ACP `session/new|load`, `session/prompt`, `session/update`,
+- Grok → ACP `session/load`, `session/prompt`, `session/update`,
   `session/cancel`, permission requests
 - Codex → `thread/list|resume`, `turn/start|steer|interrupt`, item
   notifications, approval requests
@@ -147,8 +163,7 @@ Adapters map:
   (text back), `notifications/claude/channel/permission*` (verdicts).
   Claude channels are inject-into-existing-TUI, not a full ACP peer.
 
-Lossy mappings stay lossy in the type, not hidden. A Claude channel attach
-does not pretend to be `session/load`.
+Lossy mappings stay lossy in the type, not hidden.
 
 ## Runtime rules
 
@@ -159,14 +174,12 @@ resume. Do not scrape the TUI.
 **Codex.** Prefer a long-lived `codex app-server` on a unix socket (or
 loopback websocket with auth). Human TUI connects with `codex --remote`.
 Huginn is a second app-server client on the same thread. Stdio app-server is
-single-client and is not the attach path. Fork Codex only if dual-client on
-one live thread is impossible without a patch; the patch stays small and
-upstream-shaped. Do not wrap the TUI in a PTY.
+single-client and is not the attach path. Do not wrap the TUI in a PTY.
 
 **Claude Code.** First path is a huginn **channel plugin**: MCP server with
-`claude/channel` (and `claude/channel/permission` once inject works). grokbot
-POSTs to the sidecar; the sidecar emits channel notifications into the live
-session. Local UDS peer messaging is a later fan-out, not v1.
+`claude/channel`. This is not the `/mcp` door above — `huginn-channel` injects
+into one live TUI. grokbot talks to the sidecar; the sidecar emits channel
+notifications into that session.
 
 This repo’s `.mcp.json` registers `server:huginn`. Team/Enterprise need an
 Owner to set `channelsEnabled`; Max/Pro can use the development flag:
@@ -176,252 +189,45 @@ make build
 claude --dangerously-load-development-channels server:huginn
 ```
 
-`/status` must show the huginn MCP server connected, not “no MCP server
-configured with that name”. Export `HUGINN_TOKEN` (or write `.huginn-token`
-in the repo root, gitignored) so the plugin can register with the sidecar.
+Export `HUGINN_TOKEN` (or write `.huginn-token` in the repo root, gitignored)
+so the plugin can register with the sidecar.
 
-Do **not** reverse-engineer Remote Control (`claude --remote-control`, the
-Anthropic WebSocket) as a grokbot client. That protocol is for claude.ai and
-the Claude app, stores transcripts on Anthropic servers, requires a
-claude.ai login, and is not a bot API. Community RC clients will break.
-
+Do **not** reverse-engineer Remote Control (`claude --remote-control`).
 ACP adapters that spawn `claude -p --output-format stream-json` start a
 *new* agent process. They are a resume/spawn path, not "join the TUI I
 already have open."
 
 ## Host sidecar
 
-One process per machine.
+One process per machine. Loopback by default; `--bind` a private overlay IP
+to share. Discovers by reading what the runtimes already write. Does not
+keep a durable copy of transcripts. Does not invent a hosted control plane.
 
-- Bound to loopback by default.
-- Reachable from grokbot the same way other private host tools are: Tailscale
-  or an outbound-only relay the host dials. Huginn does not invent a hosted
-  control plane.
-- Discovers by reading what the runtimes already write (Claude session
-  registry + UDS, Codex app-server socket, Grok `~/.grok/sessions`) and by
-  probing liveness. It does not require the human to advertise names.
-- Does not supervise Claude/Codex/Grok as children unless the caller
-  explicitly asked to spawn/resume.
-- Does not keep a durable copy of transcripts. The runtime already does.
-
-Cross-host "sessions anywhere" is a registry of these sidecars, not a
-central session store.
-
-## What grokbot gets
-
-grokbot can:
-
-- ask "what is running on the studio Mac / this laptop / that box"
-- watch a live turn (tools, text, waiting-for-permission)
-- inject a follow-up without sitting in the TUI
-- approve or deny a tool prompt when the adapter supports it
-- resume a disk session into a live adapter when asked
-
-grokbot cannot:
-
-- become the terminal
-- steal an exclusive keyboard lease
-- silently auto-approve every tool (permission policy is explicit per
-  attach, default deny-until-configured)
-- drive a session whose runtime is not installed on that host
-
-## Try the zmqcat mailbox transport
-
-`zmqcat` can own the durable mailbox and Tailcat transport while Huginn runs
-as a named READY worker. The existing HTTP API remains available; all methods
-except the streaming `session/watch` can also be sent as JSON-RPC request
-bodies over ZMQC.
-
-This is the by-hand version of what the Nix modules run; use it to poke at
-the bus, not to deploy. In one terminal, start a local durable bus:
-
-```sh
-zmqcat serve --local --listen unix:///tmp/zmqcat.sock --mailbox ./mailbox.json
-```
-
-In another, attach Huginn to it:
-
-```sh
-HUGINN_TOKEN=dev-secret huginn serve --zmqcat \
-  --zmqcat-listen unix:///tmp/zmqcat.sock --zmqcat-service huginn.local
-```
-
-Pass `--listen` / `--zmqcat-listen` explicitly on both sides. zmqcat's CLI
-defaults to `unix:///tmp/zmqcat-<uid>.sock` while the Nix modules default to
-`unix:///run/zmqcat/bus.sock` on Linux and `unix:///var/lib/zmqcat/bus.sock`
-on Darwin. `services.huginn.zmqcatListen` must equal `services.zmqcat.listen`.
-If the two disagree they miss each other with no error. See INSTALL.md for the
-deployed paths.
-
-`--zmqcat-workers` (default 4) sets how many requests are served concurrently;
-each worker holds its own zmqcat session, because a blocking READY occupies
-one and a single worker would queue every caller behind one slow
-`session/prompt`.
-
-Then issue a session request through the mailbox:
-
-```sh
-zmqcat req --listen unix:///tmp/zmqcat.sock huginn.local \
-  '{"jsonrpc":"2.0","id":1,"method":"session/list","params":{"liveness":"live"}}'
-```
-
-For a remote trial, remove `--local` from `zmqcat serve`, run `zmqcat join`
-with the printed Tailcat token on the Huginn host, and point Huginn at that
-join process's local socket. Huginn has no Tailcat flag; remote is
-`zmqcat join` plus `--zmqcat-listen` on the local socket.
-
-### Presence
-
-With `--zmqcat`, the sidecar announces itself on `huginn.presence.<service>`
-every 15s (`--zmqcat-presence-every`, or `--zmqcat-no-presence` to opt out).
-An orchestrator subscribes to the `huginn.presence.` prefix and zmqcat's
-last-value cache replays the most recent announcement per machine
-immediately, so a roster is available on connect rather than after a full
-interval on every host.
-
-The announcement is deliberately cheap — service, host, runtimes, bind,
-timestamp. It carries no session counts: presence runs on a timer, and
-counting sessions means walking thousands of files. Ask `session/list` with
-`{"liveness":"live"}` for that.
-
-## Harnesses as clients: `huginn-mcp`
-
-The sidecar makes a machine's sessions *reachable*. `huginn-mcp` makes them
-*askable*: one stateless MCP endpoint that every harness on every machine
-registers, so an agent can ask what is running elsewhere.
-
-It is not the Claude channel plugin. `cmd/huginn-channel` injects into one
-live Claude TUI on this host; `cmd/huginn-mcp` answers questions about
-sessions anywhere on the bus. Separate binaries, separate jobs.
-
-Run it beside `zmqcat serve` on the orchestration box:
-
-```sh
-HUGINN_MCP_TOKEN=… huginn-mcp --bind 127.0.0.1:7420
-```
-
-Two tools, both read-only:
-
-- `machines_list` — who is on the bus, from presence
-- `sessions_list` — `session/list` against one machine, or **every** machine
-  at once when `machine` is omitted
-
-Fan-out is per-machine tolerant: one unreachable host comes back as a row
-with an `error`, not a failed call, so a single dead laptop cannot blind the
-caller to everything else.
-
-Stateless is what makes one endpoint serve every harness. A tool call carries
-no session affinity, which is the same shape as a zmqcat request/reply, so
-the server is a pure translator — nothing kept between calls, restartable
-mid-conversation.
-
-### Why prompt, interrupt, and permission are not there
-
-Anything that can reach this endpoint could otherwise drive every session on
-every machine, and `session/permission` approves `Bash` and `Write` in
-someone else's live session. Those verbs stay off until per-principal
-authorization exists — garmr's job, and this endpoint is the natural place
-for it, being the one point every agent call passes through.
-
-`--token` is required. It is a network listener.
-
-### What `--zmqcat` does to the trust boundary
-
-Over HTTP, every caller proves it holds `HUGINN_TOKEN`. Over zmqcat there is
-no such proof: the worker attaches the token to the request it hands its own
-broker, so **anything that can put a job on the service mailbox gets fully
-authenticated Huginn RPC**. zmqcat has no mailbox-level ACLs.
-
-`services.huginn.zmqcatListen` must equal `services.zmqcat.listen` — Linux
-`unix:///run/zmqcat/bus.sock`, Darwin `unix:///var/lib/zmqcat/bus.sock`.
-Whoever can open that socket can issue authenticated Huginn RPC. Do not
-enable it on a host where untrusted local users can reach the sidecar.
-The HTTP surface keeps its own token check either way. For the remote
-topology, join is further gated by zmqcat's `--allow` list.
-
-## Relationship to other repos
-
-| Repo | Owns | Huginn does with it |
-| --- | --- | --- |
-| **shenmux** | PTY, screen, exclusive input lease | Nothing. Different pipe. |
-| **command-center** / **shen-command-center** | Work engine, harness isolation, take/lease, policy | Huginn is not a control plane and does not schedule work. A later consumer may call huginn. That consumer is not this repo. |
-| **garmr** | Capability gateway | Authz for "may this principal prompt session X" can sit in front. Huginn does not reimplement it. |
-| Runtime CLIs | Claude / Codex / Grok | Huginn is a client of their protocols. |
-
-If a change would make huginn a multiplexer, a work queue, or a hosted
-product, it is in the wrong repository.
-
-## Refusals
-
-Each names the owner instead. Checkable in a PR.
-
-**R1. No PTY, no terminal emulator, no keystroke injection.**
-Those are shenmux. A "fallback: type into tmux" adapter is a bug.
-
-**R2. No reverse-engineered Claude Remote Control.**
-Channels for live Claude TUIs. Official Agent SDK / print-mode only for
-spawn/resume, and labelled as such.
-
-**R3. It does not create, schedule, or reconcile work.**
-No jobs, no DAG, no Kubernetes, no "run this task overnight" engine. It
-attaches to conversations that already exist, or resumes one the runtime
-already stored.
-
-**R4. It does not store user content.**
-No transcript archive, no screenshot of a TUI, no object store. Pointers
-and liveness only.
-
-**R5. It has no vocabulary for where the process runs beyond this host.**
-No Cluster, Pod, Harness, Workspace-as-a-type. Opaque labels if a caller
-passes them through. A typed field is a claim huginn understands the
-concept. It does not.
-
-**R6. It is not a multi-agent orchestrator.**
-No subagent fan-out of its own. If Grok/Codex/Claude spawn children, huginn
-may list them when the native protocol does. It does not invent a tree.
-
-**R7. It does not ship a phone UI.**
-grokbot is the client. A debug CLI for the sidecar is allowed. A Pixi
-terminal is not.
+Multi-machine is N URLs (one sidecar each).
 
 ## Security
 
 Attaching to a live coding agent is equivalent to sitting at that keyboard
 for prompts and, if permission relay is on, for tool approval.
 
-- Loopback or private overlay only. No public listener.
-- Sidecar auth is a secret or device credential, not an unauthenticated
-  local port. A Tailcat `tc…` token does not replace `HUGINN_TOKEN`.
-- The Nix wrapper cats `tokenFile` at exec. Rotate by replacing the file
-  and restarting the service; there is no rotation API.
-- Claude channel path must sender-allowlist. An ungated channel is prompt
-  injection into the developer's session.
-- Permission relay is opt-in per session. Anyone who can send a verdict can
-  approve `Bash` / `Write`.
-- Do not log prompt bodies, tool outputs, or file contents. Session ids,
-  runtime, cwd, and attach errors are enough.
-- Codex app-server websocket off-loopback requires its auth flags. Huginn
-  must not start an unauthenticated non-loopback listener.
+- Loopback or private overlay only. No public listener (`0.0.0.0` is refused).
+- One secret. Token = full access to this host.
+- The Nix wrapper cats `tokenFile` at exec.
+- Claude channel path must sender-allowlist.
+- Permission relay is opt-in per session.
+- Do not log prompt bodies, tool outputs, or file contents.
+- Codex app-server websocket off-loopback requires its auth flags.
 
 ## Sequencing
 
 Nothing after a step starts until that step has a spike with a real
 runtime, not a mock.
 
-1. **Grok ACP** — list `~/.grok/sessions`, attach to a live leader/agent,
-   `session/prompt`, stream `session/update`. Prove dual presence: human TUI
-   still works while huginn watches and injects.
-2. **Codex app-server** — unix socket, TUI via `--remote`, huginn as second
-   client on one thread. If dual-client fails, document the gap and only
-   then consider an upstream-shaped patch. No PTY fallback.
-3. **Claude channel** — huginn MCP channel plugin, loopback inject from the
-   sidecar, reply tool, sender allowlist. Development-channels flag is fine
-   until allowlisted. Then permission relay.
-4. **Sidecar contract** — one process, `session/list` across the three
-   adapters, auth on the grokbot socket.
-5. **Cross-host** — registry of sidecars over Tailscale or an outbound
-   relay (zmqcat join is transport only). Last. Not a reason to build a
-   controller first.
+1. **Grok ACP** — list, attach to a live leader, prompt, stream updates.
+2. **Codex app-server** — unix socket, TUI via `--remote`, huginn as second client.
+3. **Claude channel** — huginn MCP channel plugin, loopback inject, allowlist.
+4. **Sidecar contract** — one process, five verbs, auth, MCP + ACP doors.
+5. **Cross-host** — bind a private overlay address. Not a bus.
 
 Finite bar for v1: from grokbot, list sessions on one enrolled machine,
 watch a live Grok turn, inject a prompt into that turn, inject into a live
@@ -431,39 +237,50 @@ into a PTY, v1 has failed.
 
 ### Where this actually is
 
-Done: the five verbs over loopback HTTP; the three adapters; `session/list`
-filtered and paged; zmqcat as an optional transport; presence; a read-only
-`huginn-mcp` across the bus; Nix packaging and service modules.
+Done: five verbs over loopback HTTP; the three adapters; filtered/paged
+`session/list` that is fast on a real Grok home; honest `join=none` when
+nothing is attachable; MCP and ACP on the same listener; Nix sidecar module.
 
 Not done, in the order it matters:
 
-1. **Per-principal authorization.** `prompt`, `interrupt`, and `permission`
-   are deliberately absent from `huginn-mcp` until it exists — anything that
-   can reach that endpoint could otherwise drive every session on every
-   machine. garmr's job; this endpoint is the chokepoint to put it in front
-   of.
-2. **`session/watch` snapshot on the bus.** A bounded snapshot on the bus
-   is the v1 path; pub/sub is deferred.
-3. **A `pi` adapter** — [#2](https://github.com/pyrex41/huginn/issues/2).
-4. **Cross-host Tailcat, actually exercised.** Everything so far has been
-   verified with two sidecars on one machine over a local socket.
+1. Dual-client inject into a **leader-backed** Grok TUI, a Claude TUI with
+   the channel plugin loaded, and a Codex app-server `--remote` thread.
+   List works; those attach paths are still fail-closed on a typical laptop.
+2. Per-principal authorization (garmr). Until then the token is host-wide.
+3. A `pi` adapter — [#2](https://github.com/pyrex41/huginn/issues/2).
+
+## Refusals
+
+**R1. No PTY, no terminal emulator, no keystroke injection.**
+Those are shenmux.
+
+**R2. No reverse-engineered Claude Remote Control.**
+Channels for live Claude TUIs.
+
+**R3. It does not create, schedule, or reconcile work.**
+
+**R4. It does not store user content.**
+No transcript archive.
+
+**R5. It has no vocabulary for where the process runs beyond this host.**
+
+**R6. It is not a multi-agent orchestrator.**
+
+**R7. It does not ship a phone UI.**
+grokbot is the client. A debug CLI is allowed.
 
 ## Layout
 
 ```
-README.md            this document; the product is the pipe it describes
-INSTALL.md           hub, then machines, then harnesses
-cmd/huginn/          sidecar + debug CLI
-cmd/huginn-mcp/      read-only MCP endpoint across the bus
+README.md            this document
+INSTALL.md           token, serve, overlay bind, harness JSON
+cmd/huginn/          sidecar + debug CLI + `huginn acp`
 cmd/huginn-channel/  Claude channel plugin (injects into one live TUI)
-internal/broker/     the five verbs
+internal/broker/     the five verbs, MCP, ACP
 internal/adapter/    grok, codex, claude — native protocols only
 internal/discover/   live vs resumable probes
-internal/presence/   who is on the bus
-nix/                 packaging and the service modules
+nix/                 packaging and the sidecar module
 ```
-
-No web UI package. No deploy chart. No shenmux import.
 
 ## Name
 

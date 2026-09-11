@@ -9,11 +9,6 @@ in
 {
   options.services.huginn = import ./sidecar-options.nix {
     inherit lib;
-    # home-manager cannot set system services.zmqcat.listen; match the role path.
-    zmqcatListenDefault =
-      if pkgs.stdenv.hostPlatform.isDarwin
-      then "unix:///var/lib/zmqcat/bus.sock"
-      else "unix:///run/zmqcat/bus.sock";
   } // {
     package = lib.mkOption {
       type = lib.types.package;

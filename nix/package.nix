@@ -10,7 +10,7 @@ buildGoModule {
   # Regenerate with `go mod vendor` whenever go.mod changes.
   vendorHash = null;
 
-  subPackages = [ "cmd/huginn" "cmd/huginn-mcp" "cmd/huginn-channel" ];
+  subPackages = [ "cmd/huginn" "cmd/huginn-channel" ];
 
   ldflags = [ "-s" "-w" ];
 

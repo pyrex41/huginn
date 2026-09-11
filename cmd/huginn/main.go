@@ -7,14 +7,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
-	"time"
+	"syscall"
 
 	"github.com/pyrex41/huginn/internal/broker"
-	"github.com/pyrex41/huginn/internal/presence"
 )
 
 const defaultBind = "127.0.0.1:7419"
@@ -27,6 +26,8 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		os.Exit(runServe(os.Args[2:]))
+	case "acp":
+		os.Exit(runACP(os.Args[2:]))
 	case "list":
 		os.Exit(runList(os.Args[2:]))
 	case "rpc":
@@ -41,66 +42,49 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `huginn — host sidecar for grokbot (five verbs)
+	fmt.Fprintf(os.Stderr, `huginn — host sidecar for live Claude, Codex, and Grok sessions
 
 Usage:
   huginn serve [--bind 127.0.0.1:7419] [--token TOKEN]
-               [--zmqcat] [--zmqcat-listen ADDR] [--zmqcat-service NAME]
-               [--zmqcat-workers N] [--zmqcat-no-presence]
-  huginn list [--addr 127.0.0.1:7419] [--token TOKEN] [--liveness live|resumable]
-              [--runtime grok|codex|claude] [--cwd PREFIX] [--limit N] [--cursor C]
+  huginn acp   [--token TOKEN]
+  huginn list  [--addr 127.0.0.1:7419] [--token TOKEN] [--liveness live|resumable]
+               [--runtime grok|codex|claude] [--cwd PREFIX] [--limit N] [--cursor C]
   huginn rpc --token TOKEN [--addr 127.0.0.1:7419] METHOD [JSON_PARAMS]
 
 Environment:
   HUGINN_TOKEN   sidecar secret (required if --token is omitted)
 
-serve binds loopback only.
+serve binds loopback by default. --bind may be a private overlay address
+(WireGuard, Tailscale). Same process, same token:
+
+  POST /      JSON-RPC (five verbs)
+  POST /mcp   MCP tools
+  /acp        ACP WebSocket
+  huginn acp  ACP on stdio (local agent command)
+
+Token is full access to this host.
 
 Grok attaches via ACP. Codex attaches as a second JSON-RPC client on a live
 app-server unix/loopback socket (codex --remote).
 Claude live-join is the huginn MCP channel plugin (not claude -p, not Remote Control).
-Project .mcp.json names the server huginn. Team/Enterprise need channelsEnabled.
   claude --dangerously-load-development-channels server:huginn
 `)
 }
 
 type serveOpts struct {
-	Bind          string
-	Token         string
-	ZMQCat        bool
-	ZMQListen     string
-	ZMQService    string
-	ZMQWorkers    int
-	NoPresence    bool
-	PresenceEvery time.Duration
+	Bind  string
+	Token string
 }
 
 func parseServe(args []string) (serveOpts, error) {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	bind := fs.String("bind", defaultBind, "loopback listen address")
+	bind := fs.String("bind", defaultBind, "listen address (loopback or private overlay)")
 	token := fs.String("token", os.Getenv("HUGINN_TOKEN"), "auth token (or HUGINN_TOKEN)")
-	zmqEnabled := fs.Bool("zmqcat", false, "serve JSON-RPC requests as a zmqcat READY worker")
-	zmqListen := fs.String("zmqcat-listen", "", "zmqcat local sidecar address")
-	zmqService := fs.String("zmqcat-service", "huginn", "zmqcat service mailbox")
-	zmqWorkers := fs.Int("zmqcat-workers", defaultZMQWorkers, "concurrent zmqcat READY workers")
-	noPresence := fs.Bool("zmqcat-no-presence", false, "do not announce this sidecar on the bus")
-	presenceEvery := fs.Duration("zmqcat-presence-every", presence.DefaultInterval, "presence announcement interval")
 	fs.SetOutput(os.Stderr)
 	if err := fs.Parse(args); err != nil {
 		return serveOpts{}, err
 	}
-	opts := serveOpts{
-		Bind: *bind, Token: *token, ZMQCat: *zmqEnabled,
-		ZMQListen: *zmqListen, ZMQService: strings.TrimSpace(*zmqService),
-		ZMQWorkers: *zmqWorkers, NoPresence: *noPresence, PresenceEvery: *presenceEvery,
-	}
-	if opts.ZMQCat && opts.ZMQService == "" {
-		return serveOpts{}, errNoZMQService
-	}
-	if opts.ZMQCat && opts.ZMQWorkers < 1 {
-		return serveOpts{}, fmt.Errorf("--zmqcat-workers must be at least 1")
-	}
-	return opts, nil
+	return serveOpts{Bind: *bind, Token: *token}, nil
 }
 
 func runServe(args []string) int {
@@ -116,39 +100,46 @@ func runServe(args []string) int {
 		fmt.Fprintf(os.Stderr, "huginn: %v\n", err)
 		return 1
 	}
-	ln, err := net.Listen("tcp", srv.Addr())
+	lns, err := srv.Listen()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "huginn: %v\n", err)
 		return 1
 	}
-	defer ln.Close()
-	actual := ln.Addr().String()
-	fmt.Fprintf(os.Stderr, "huginn: listening on %s token_present=%v\n", actual, strings.TrimSpace(opts.Token) != "")
-
-	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
-	if opts.ZMQCat {
-		logf := func(format string, args ...any) { fmt.Fprintf(os.Stderr, format, args...) }
-		worker, err := startZMQWorker(ctx, opts.ZMQListen, opts.ZMQService, srv.Handler(), opts.Token, opts.ZMQWorkers, logf)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "huginn: zmqcat: %v\n", err)
-			return 1
+	defer func() {
+		for _, ln := range lns {
+			_ = ln.Close()
 		}
-		defer worker.Close()
-		fmt.Fprintf(os.Stderr, "huginn: zmqcat READY service=%s listen=%s workers=%d\n", opts.ZMQService, displayZMQListen(opts.ZMQListen), opts.ZMQWorkers)
-
-		if !opts.NoPresence {
-			pres, err := presence.Start(ctx, opts.ZMQListen, opts.ZMQService, actual, srv.Runtimes(), opts.PresenceEvery, logf)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "huginn: zmqcat presence: %v\n", err)
-				return 1
-			}
-			defer pres.Close()
-			fmt.Fprintf(os.Stderr, "huginn: announcing on %s%s\n", presence.Topic, opts.ZMQService)
-		}
+	}()
+	for _, ln := range lns {
+		fmt.Fprintf(os.Stderr, "huginn: listening on %s token_present=%v\n", ln.Addr(), strings.TrimSpace(opts.Token) != "")
 	}
 
-	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+	if err := srv.ServeAll(lns); err != nil && err != http.ErrServerClosed {
+		fmt.Fprintf(os.Stderr, "huginn: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func runACP(args []string) int {
+	fs := flag.NewFlagSet("acp", flag.ContinueOnError)
+	token := fs.String("token", os.Getenv("HUGINN_TOKEN"), "auth token (or HUGINN_TOKEN)")
+	fs.SetOutput(os.Stderr)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if strings.TrimSpace(*token) == "" {
+		fmt.Fprintln(os.Stderr, "huginn: --token or HUGINN_TOKEN required")
+		return 2
+	}
+	srv, err := broker.New(broker.Config{Bind: "127.0.0.1:0", Token: *token})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "huginn: %v\n", err)
+		return 1
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := srv.ServeACP(ctx, os.Stdin, os.Stdout); err != nil && err != context.Canceled {
 		fmt.Fprintf(os.Stderr, "huginn: %v\n", err)
 		return 1
 	}

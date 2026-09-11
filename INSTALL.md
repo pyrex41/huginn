@@ -1,91 +1,9 @@
 # Install
 
-Two repos, one flake input. Add `huginn` and you get both halves: it pulls
-`zmqcat` in and re-exports its package and modules.
+One process on the machine whose sessions you want to share. Network is
+yours (loopback, WireGuard, Tailscale). One token is the capability.
 
-```nix
-# flake.nix
-{
-  inputs.huginn.url = "github:pyrex41/huginn";
-}
-```
-
-There are two sides, and they are not symmetric:
-
-| | runs | what it does |
-| --- | --- | --- |
-| **machine** | as *you* | attaches to your Claude / Codex / Grok sessions and serves them on the bus |
-| **hub** | anywhere with a stable address | owns the bus, and answers harnesses over MCP |
-
-Set up the hub once. Add each machine after.
-
----
-
-## 1. The hub
-
-One box the machines can reach — a VPS, a NAS, the always-on desktop.
-
-```nix
-# NixOS
-{ inputs, ... }: {
-  imports = [ inputs.huginn.nixosModules.default ];
-
-  services.zmqcat = {
-    enable = true;
-    role = "serve";
-    mailbox = "/var/lib/zmqcat/mailbox.json";   # jobs survive a restart
-    # Linux. Darwin: unix:///var/lib/zmqcat/bus.sock
-    listen = "unix:///run/zmqcat/bus.sock";
-  };
-
-  services.huginn-mcp = {
-    enable = true;
-    tokenFile = "/run/secrets/huginn-mcp-token";
-    zmqcatListen = "unix:///run/zmqcat/bus.sock";  # must equal services.zmqcat.listen
-  };
-}
-```
-
-Generate the token first — any long random string:
-
-```sh
-openssl rand -hex 32 | sudo tee /run/secrets/huginn-mcp-token
-sudo chmod 600 /run/secrets/huginn-mcp-token
-```
-
-On first start the bus prints a `tc…` token to its log. **That token is how
-machines join, and anyone holding it can reach the bus**, so move it like a
-password:
-
-```sh
-journalctl -u zmqcat | grep '^tc'
-```
-
-Restrict who may dial in with `services.zmqcat.allow = [ "nodekey:…" ]`.
-Without it, the token alone is enough.
-
----
-
-## 2. Each machine
-
-The sidecar reads *your* `~/.grok`, `~/.claude`, and `~/.codex`, so it runs
-as you, not as root. home-manager is the way in. The machine is a user
-sidecar plus a system `zmqcat` join — leave `huginn-mcp` on the hub.
-
-```nix
-# home.nix
-{ inputs, ... }: {
-  imports = [ inputs.huginn.homeManagerModules.default ];
-
-  services.huginn = {
-    enable = true;
-    service = "h.studio";                        # this machine's name on the bus
-    tokenFile = "${config.home.homeDirectory}/.config/huginn/token";
-    # must equal services.zmqcat.listen on this host
-    zmqcatListen = "unix:///run/zmqcat/bus.sock";
-  };
-}
-```
+## 1. Token
 
 ```sh
 mkdir -p ~/.config/huginn
@@ -93,121 +11,79 @@ openssl rand -hex 32 > ~/.config/huginn/token
 chmod 600 ~/.config/huginn/token
 ```
 
-`service` must be unique across the bus — it *is* the machine's address.
+## 2. Run
 
-The machine also needs a local socket onto the hub's bus: a **system**
-zmqcat join, next to the **user** sidecar. Put the `tc…` token from step 1
-in a file and join:
+```sh
+HUGINN_TOKEN="$(cat ~/.config/huginn/token)" huginn serve
+# 127.0.0.1:7419
+```
+
+Share on an overlay you already have:
+
+```sh
+HUGINN_TOKEN="$(cat ~/.config/huginn/token)" huginn serve --bind 10.8.0.2:7419
+```
+
+`--bind` must be loopback or a private address (RFC1918, Tailscale
+`100.64/10`, IPv6 ULA). `0.0.0.0` is refused. An overlay bind also listens
+on `127.0.0.1` of the same port so `huginn list` and the Claude plugin keep
+working.
+
+Nix (home-manager, as you):
 
 ```nix
-# NixOS, or nix-darwin with darwinModules.default
-services.zmqcat = {
+imports = [ inputs.huginn.homeManagerModules.default ];
+services.huginn = {
   enable = true;
-  role = "join";
-  tokenFile = "/run/secrets/zmqcat-join-token";
-  # Linux. Darwin: unix:///var/lib/zmqcat/bus.sock
-  listen = "unix:///run/zmqcat/bus.sock";
+  tokenFile = "${config.home.homeDirectory}/.config/huginn/token";
+  # bind = "10.8.0.2:7419";
 };
 ```
 
-`services.huginn.zmqcatListen` must equal `services.zmqcat.listen`. If they
-disagree, the sidecar misses the bus with no error.
+NixOS can run the same sidecar as `services.huginn.user` (that human, not
+root). macOS uses the home-manager launchd agent.
 
-Same machine as the hub? Skip the join and set
-`services.zmqcat.role = "serve"` with `local = true`.
+Without Nix: `make build` or
+`go install github.com/pyrex41/huginn/cmd/huginn@latest`.
 
-`services.huginn.zmqcatListen` must equal `services.zmqcat.listen`. The
-modules default both to `unix:///run/zmqcat/bus.sock` on Linux and
-`unix:///var/lib/zmqcat/bus.sock` on Darwin (directory 0755 so the user
-sidecar can traverse). zmqcat creates the socket with `net.Listen`. On
-NixOS, huginn sets the bus `UMask` to `0007` (group-writable, not world);
-the NixOS sidecar user is added to `services.zmqcat.group` automatically.
-home-manager cannot set that — add it on the system:
+## 3. Point a harness at it
 
-```nix
-users.users.<you>.extraGroups = [ "zmqcat" ];
-```
-
----
-
-## 3. Point your harnesses at it
-
-One URL, every harness, every machine:
+MCP:
 
 ```json
 {
   "mcpServers": {
     "huginn": {
       "type": "http",
-      "url": "http://hub.internal:7420/mcp",
-      "headers": { "Authorization": "Bearer YOUR_MCP_TOKEN" }
+      "url": "http://10.8.0.2:7419/mcp",
+      "headers": { "Authorization": "Bearer TOKEN" }
     }
   }
 }
 ```
 
-Claude Code: `~/.claude.json` or a project `.mcp.json`. Codex and Grok Build
-take the same shape in their own config.
+ACP (grokbot, Zed, or spawn `huginn acp`): WebSocket
+`ws://10.8.0.2:7419/acp` with the same Bearer.
 
-Then ask an agent *"what coding sessions are running on my machines?"* — it
-calls `machines_list`, then `sessions_list`, and gets every machine at once.
+JSON-RPC: `POST http://10.8.0.2:7419/` with the same header.
 
----
+`POST /mcp` is the harness door. The Claude **channel plugin**
+(`huginn-channel`, project `.mcp.json`) is a different binary: it injects
+into a live Claude TUI on this machine. Load it with
+`claude --dangerously-load-development-channels server:huginn`.
 
 ## Verify
 
 ```sh
-# hub: are machines announcing themselves?
-# Linux; Darwin: unix:///var/lib/zmqcat/bus.sock
-zmqcat sub --listen unix:///run/zmqcat/bus.sock huginn.presence.
-
-# hub: does the MCP endpoint answer?
-curl -s -X POST http://127.0.0.1:7420/mcp \
-  -H "Authorization: Bearer $(cat /run/secrets/huginn-mcp-token)" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
-       "params":{"name":"machines_list","arguments":{}}}'
-
-# machine: is the sidecar up?
 huginn list --liveness live --token "$(cat ~/.config/huginn/token)"
 ```
 
-A machine that never appears in `machines_list` either cannot reach the bus
-or is announcing under a name you did not expect. Check its log —
-`journalctl --user -u huginn`, or `~/Library/Logs/huginn.log` on macOS.
+Rows with `join=none` are live but not attachable yet (no Grok leader, no
+Claude channel plugin, no Codex app-server). That is honest, not a transport
+bug.
 
----
+## Trust
 
-## Without Nix
-
-```sh
-go build -o bin/huginn ./cmd/huginn
-go build -o bin/huginn-mcp ./cmd/huginn-mcp
-```
-
-The modules pass ordinary flags; `huginn serve --help` and
-`huginn-mcp --help` show the same options under different names.
-
----
-
-## What this does to your trust boundary
-
-Read this before enabling it anywhere shared.
-
-- **Tokens are paths, never literals.** Every `tokenFile` option takes a
-  path. The Nix wrapper cats it at exec so the secret never lands in the
-  store. Rotate by replacing the file and restarting the service; there is
-  no rotation API.
-- **The bus has no mailbox ACLs.** Anything that can open the zmqcat socket
-  can read and write every mailbox, and the sidecar attaches `HUGINN_TOKEN`
-  to requests itself — so socket access is equivalent to authenticated
-  huginn RPC. Listen is a per-role absolute path (Linux
-  `unix:///run/zmqcat/bus.sock`, Darwin `unix:///var/lib/zmqcat/bus.sock`)
-  and must match `services.zmqcat.listen`. Do not enable this on a host
-  where untrusted local users can reach that socket.
-- **The MCP endpoint is read-only on purpose.** `prompt`, `interrupt`, and
-  `permission` are not exposed. Anything reaching it could otherwise drive
-  every session on every machine, and `session/permission` approves `Bash`
-  and `Write` in someone else's live session. Those verbs wait on
-  per-principal authorization.
-- **`--bind` defaults to loopback.** Put an overlay or a TLS terminator in
-  front before exposing the MCP endpoint further.
+The token is sitting at that keyboard: list, prompt, interrupt, and
+permission (Bash/Write) on this host. Do not put the listener on a public
+address. Rotate by replacing `tokenFile` and restarting.

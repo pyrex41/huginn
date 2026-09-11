@@ -21,13 +21,47 @@ func TestNewRequiresToken(t *testing.T) {
 	}
 }
 
-func TestNewRefusesNonLoopback(t *testing.T) {
-	_, err := New(Config{Bind: "0.0.0.0:7419", Token: "secret"})
-	if err == nil {
-		t.Fatal("expected error for public bind")
+func TestNewRefusesPublicBind(t *testing.T) {
+	for _, bind := range []string{"0.0.0.0:7419", "[::]:7419", "8.8.8.8:7419"} {
+		_, err := New(Config{Bind: bind, Token: "secret"})
+		if err == nil {
+			t.Fatalf("expected error for public bind %s", bind)
+		}
+		if !strings.Contains(err.Error(), "public bind") {
+			t.Fatalf("bind %s: %v", bind, err)
+		}
 	}
-	if !strings.Contains(err.Error(), "non-loopback") {
-		t.Fatalf("unexpected error: %v", err)
+}
+
+func TestNewAllowsPrivateBind(t *testing.T) {
+	for _, bind := range []string{"10.0.0.5:7419", "100.64.0.1:7419", "192.168.1.9:7419", "127.0.0.1:0"} {
+		if _, err := New(Config{Bind: bind, Token: "secret", Host: discover.NewWith()}); err != nil {
+			t.Fatalf("bind %s: %v", bind, err)
+		}
+	}
+}
+
+func TestListenAddrsDualLoopback(t *testing.T) {
+	got, err := ListenAddrs("10.8.0.2:7419")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != "10.8.0.2:7419" || got[1] != "127.0.0.1:7419" {
+		t.Fatalf("got %v", got)
+	}
+	one, err := ListenAddrs("127.0.0.1:7419")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(one) != 1 || one[0] != "127.0.0.1:7419" {
+		t.Fatalf("loopback dualled: %v", one)
+	}
+	ephemeral, err := ListenAddrs("10.8.0.2:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ephemeral) != 1 {
+		t.Fatalf("port 0 should not dual-listen: %v", ephemeral)
 	}
 }
 

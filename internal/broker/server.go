@@ -24,8 +24,7 @@ const MaxRPCBytes = 1 << 20
 const (
 	// DefaultListLimit bounds an unparameterised session/list. A host
 	// accumulates thousands of resumable rows; returning all of them
-	// produces a response near MaxRPCBytes that no single zmqcat frame or
-	// MCP tool result can carry.
+	// produces a response near MaxRPCBytes that no MCP tool result can carry.
 	DefaultListLimit = 200
 	// MaxListLimit is the largest page a caller may ask for.
 	MaxListLimit = 1000
@@ -33,7 +32,8 @@ const (
 
 const maxRPCBytes = MaxRPCBytes
 
-// Config for the loopback sidecar. Token is required. Bind must be loopback.
+// Config for the sidecar. Token is required. Bind must be loopback or a
+// private overlay address (RFC1918, RFC6598, IPv6 ULA).
 type Config struct {
 	Bind  string
 	Token string
@@ -57,7 +57,7 @@ func New(cfg Config) (*Server, error) {
 	if bind == "" {
 		bind = "127.0.0.1:7419"
 	}
-	if err := requireLoopback(bind); err != nil {
+	if err := requirePrivate(bind); err != nil {
 		return nil, err
 	}
 	host := cfg.Host
@@ -89,27 +89,73 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/plugin/claude/register", s.pluginRegister)
 	mux.HandleFunc("/plugin/claude/heartbeat", s.pluginRegister)
 	mux.HandleFunc("/plugin/claude/reply", s.pluginReply)
+	mux.HandleFunc("/mcp", s.serveMCP)
+	mux.HandleFunc("/acp", s.serveACPWS)
 	mux.HandleFunc("/", s.serveRPC)
 	return mux
 }
 
 func (s *Server) Serve(l net.Listener) error {
-	if err := requireLoopbackAddr(l.Addr()); err != nil {
+	if err := requirePrivateAddr(l.Addr()); err != nil {
 		return err
 	}
 	return s.http.Serve(l)
 }
 
+// Listen opens every address from ListenAddrs(bind).
+func (s *Server) Listen() ([]net.Listener, error) {
+	addrs, err := ListenAddrs(s.bind)
+	if err != nil {
+		return nil, err
+	}
+	lns := make([]net.Listener, 0, len(addrs))
+	for _, a := range addrs {
+		ln, err := net.Listen("tcp", a)
+		if err != nil {
+			for _, open := range lns {
+				_ = open.Close()
+			}
+			return nil, err
+		}
+		if err := requirePrivateAddr(ln.Addr()); err != nil {
+			_ = ln.Close()
+			for _, open := range lns {
+				_ = open.Close()
+			}
+			return nil, err
+		}
+		lns = append(lns, ln)
+	}
+	return lns, nil
+}
+
+// ServeAll serves the handler on every listener until one returns.
+func (s *Server) ServeAll(lns []net.Listener) error {
+	if len(lns) == 0 {
+		return fmt.Errorf("broker: no listeners")
+	}
+	if len(lns) == 1 {
+		return s.Serve(lns[0])
+	}
+	errc := make(chan error, len(lns))
+	for _, ln := range lns {
+		ln := ln
+		go func() { errc <- s.Serve(ln) }()
+	}
+	return <-errc
+}
+
 func (s *Server) ListenAndServe() error {
-	ln, err := net.Listen("tcp", s.bind)
+	lns, err := s.Listen()
 	if err != nil {
 		return err
 	}
-	if err := requireLoopbackAddr(ln.Addr()); err != nil {
-		_ = ln.Close()
-		return err
-	}
-	return s.Serve(ln)
+	defer func() {
+		for _, ln := range lns {
+			_ = ln.Close()
+		}
+	}()
+	return s.ServeAll(lns)
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
@@ -351,8 +397,43 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request, req request
 }
 
 func (s *Server) watch(ctx context.Context, req request) response {
-	// Unreachable for HTTP: handleWatch is used. Kept for dispatch completeness.
-	return errorResponse(req.ID, CodeInternalError, "watch must stream")
+	return s.watchSnapshot(ctx, req)
+}
+
+func (s *Server) watchSnapshot(ctx context.Context, req request) response {
+	var p watchParams
+	if err := decodeParams(req.Params, &p); err != nil {
+		return errorResponse(req.ID, CodeInvalidParams, "invalid params")
+	}
+	if p.SessionID == "" {
+		return errorResponse(req.ID, CodeInvalidParams, "sessionId required")
+	}
+	p.Snapshot = true
+	ch, err := s.host.Watch(ctx, adapter.WatchRequest{
+		SessionID:       p.SessionID,
+		Resume:          p.Resume,
+		PermissionRelay: p.PermissionRelay,
+		Snapshot:        true,
+	})
+	if err != nil {
+		return errorResponse(req.ID, CodeInternalError, err.Error())
+	}
+	updates := make([]any, 0)
+	if ch != nil {
+		for u := range ch {
+			updates = append(updates, u)
+		}
+	}
+	return resultResponse(req.ID, watchResult{Updates: updates})
+}
+
+// call runs one JSON-RPC method in-process. Watch is always a snapshot.
+func (s *Server) call(ctx context.Context, method string, params json.RawMessage) response {
+	req := request{JSONRPC: jsonRPCVersion, ID: json.RawMessage("1"), Method: method, Params: params}
+	if method == MethodWatch {
+		return s.watchSnapshot(ctx, req)
+	}
+	return s.dispatch(ctx, req)
 }
 
 func (s *Server) prompt(ctx context.Context, req request) response {
@@ -507,22 +588,4 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func requireLoopback(bind string) error {
-	host, _, err := net.SplitHostPort(bind)
-	if err != nil {
-		return fmt.Errorf("broker: bind %q: %w", bind, err)
-	}
-	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		return fmt.Errorf("broker: refusing non-loopback bind %q", bind)
-	}
-	return nil
-}
 
-func requireLoopbackAddr(addr net.Addr) error {
-	tcp, ok := addr.(*net.TCPAddr)
-	if !ok || tcp.IP == nil || !tcp.IP.IsLoopback() {
-		return fmt.Errorf("broker: refusing non-loopback listener %s", addr)
-	}
-	return nil
-}

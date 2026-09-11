@@ -18,28 +18,7 @@
     },
     "root": {
       "inputs": {
-        "nixpkgs": "nixpkgs",
-        "zmqcat": "zmqcat"
-      }
-    },
-    "zmqcat": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1788306472,
-        "narHash": "sha256-sY86pB2zGgHl93y6EcRAoo7QqSmI+7/WUX6KpOZphtc=",
-        "owner": "pyrex41",
-        "repo": "zmqcat",
-        "rev": "527f2ac842ebf285eccf283e9585c7e43b4717eb",
-        "type": "github"
-      },
-      "original": {
-        "owner": "pyrex41",
-        "repo": "zmqcat",
-        "type": "github"
+        "nixpkgs": "nixpkgs"
       }
     }
   },

@@ -3,12 +3,9 @@ self:
 
 let
   cfg = config.services.huginn;
-  mcp = config.services.huginn-mcp;
   hlib = import ./lib.nix { inherit lib; };
   system = pkgs.stdenv.hostPlatform.system;
   sidecarScript = hlib.mkSidecarScript { inherit pkgs lib; cfg = cfg; };
-  mcpScript = hlib.mkMcpScript { inherit pkgs lib; cfg = mcp; };
-  zmqListen = "unix:///run/zmqcat/bus.sock";
 in
 {
   options.services.huginn = import ./sidecar-options.nix { inherit lib; } // {
@@ -29,75 +26,23 @@ in
     };
   };
 
-  options.services.huginn-mcp = import ./mcp-options.nix { inherit lib; } // {
-    package = lib.mkOption {
-      type = lib.types.package;
-      default = self.packages.${system}.huginn;
-      defaultText = lib.literalExpression "huginn.packages.\${system}.huginn";
-      description = "huginn package providing huginn-mcp.";
+  config = lib.mkIf cfg.enable {
+    assertions = [{
+      assertion = cfg.user != "root";
+      message = "services.huginn.user must be the human whose sessions it attaches to, not root.";
+    }];
+    systemd.services.huginn = {
+      description = "huginn session sidecar";
+      wantedBy = [ "multi-user.target" ];
+      after = [ "network-online.target" ];
+      wants = [ "network-online.target" ];
+      serviceConfig = {
+        ExecStart = sidecarScript;
+        Restart = "always";
+        RestartSec = 2;
+        User = cfg.user;
+        NoNewPrivileges = true;
+      };
     };
   };
-
-  config = lib.mkMerge [
-    # Independent of huginn / huginn-mcp: join-only machines still need the path.
-    (lib.mkIf config.services.zmqcat.enable {
-      services.zmqcat.listen = lib.mkDefault zmqListen;
-      # zmqcat's module uses 0077 (0700 socket). Group write so the sidecar
-      # user and DynamicUser MCP can connect; not 0000 (world).
-      systemd.services.zmqcat.serviceConfig.UMask = lib.mkForce "0007";
-    })
-    (lib.mkIf cfg.enable {
-      services.huginn.zmqcatListen = lib.mkDefault (
-        if config.services.zmqcat.enable then config.services.zmqcat.listen else zmqListen
-      );
-      assertions = [{
-        assertion = cfg.user != "root";
-        message = "services.huginn.user must be the human whose sessions it attaches to, not root.";
-      }];
-      users.users.${cfg.user}.extraGroups = lib.mkIf config.services.zmqcat.enable [
-        config.services.zmqcat.group
-      ];
-      systemd.services.huginn = {
-        description = "huginn session sidecar";
-        wantedBy = [ "multi-user.target" ];
-        after = [ "network-online.target" ];
-        wants = [ "network-online.target" ];
-        serviceConfig = {
-          ExecStart = sidecarScript;
-          Restart = "always";
-          RestartSec = 2;
-          User = cfg.user;
-          NoNewPrivileges = true;
-          SupplementaryGroups = lib.mkIf config.services.zmqcat.enable [
-            config.services.zmqcat.group
-          ];
-        };
-      };
-    })
-    (lib.mkIf mcp.enable {
-      services.huginn-mcp.zmqcatListen = lib.mkDefault (
-        if config.services.zmqcat.enable then config.services.zmqcat.listen else zmqListen
-      );
-      systemd.services.huginn-mcp = {
-        description = "huginn MCP endpoint";
-        wantedBy = [ "multi-user.target" ];
-        after = [ "network-online.target" ];
-        wants = [ "network-online.target" ];
-        serviceConfig = {
-          ExecStart = mcpScript;
-          Restart = "always";
-          RestartSec = 2;
-          DynamicUser = true;
-          # Read-only fan-out; it needs the bus socket and its token, nothing else.
-          NoNewPrivileges = true;
-          ProtectSystem = "strict";
-          ProtectHome = true;
-          PrivateTmp = lib.mkDefault true; # socket is /run/zmqcat, not /tmp
-          SupplementaryGroups = lib.mkIf config.services.zmqcat.enable [
-            config.services.zmqcat.group
-          ];
-        };
-      };
-    })
-  ];
 }

@@ -1,8 +1,0 @@
-/zmqcat
-/bin/
-*.exe
-*.test
-*.out
-.DS_Store
-/tmp/
-dist/

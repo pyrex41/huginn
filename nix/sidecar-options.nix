@@ -1,6 +1,5 @@
-# Options for the machine-side sidecar, shared by the home-manager, NixOS,
-# and nix-darwin modules so they cannot drift.
-{ lib, zmqcatListenDefault ? "unix:///run/zmqcat/bus.sock" }:
+# Options for the sidecar, shared by home-manager and NixOS.
+{ lib }:
 
 with lib;
 {
@@ -9,15 +8,6 @@ with lib;
   package = mkOption {
     type = types.package;
     description = "huginn package to run.";
-  };
-
-  service = mkOption {
-    type = types.str;
-    example = "h.studio";
-    description = ''
-      This machine's name on the bus. Callers address it by this, and it is
-      the mailbox huginn serves — so it must be unique across the bus.
-    '';
   };
 
   tokenFile = mkOption {
@@ -32,38 +22,10 @@ with lib;
   bind = mkOption {
     type = types.str;
     default = "127.0.0.1:7419";
-    description = "Loopback address for the HTTP JSON-RPC surface.";
-  };
-
-  zmqcatListen = mkOption {
-    type = types.str;
-    # Absolute: lib.escapeShellArgs would bake %t / $XDG_RUNTIME_DIR as literals.
-    default = zmqcatListenDefault;
     description = ''
-      Local zmqcat sidecar socket to attach to. Must equal
-      services.zmqcat.listen; Huginn dials, it does not start zmqcat.
+      Listen address. Loopback by default. A private overlay IP
+      (WireGuard, Tailscale 100.64/10) shares the sidecar; 0.0.0.0 is refused.
     '';
-  };
-
-  workers = mkOption {
-    type = types.ints.positive;
-    default = 4;
-    description = ''
-      Concurrent zmqcat READY workers. Each holds its own session; one
-      worker would queue every caller behind one slow session/prompt.
-    '';
-  };
-
-  presence = mkOption {
-    type = types.bool;
-    default = true;
-    description = "Announce this machine on huginn.presence.<service>.";
-  };
-
-  presenceEvery = mkOption {
-    type = types.str;
-    default = "15s";
-    description = "Presence announcement interval.";
   };
 
   extraArgs = mkOption {
