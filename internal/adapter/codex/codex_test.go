@@ -78,14 +78,11 @@ func TestListForeignWriterLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ss) != 1 || ss[0].ID != "thr_other" || ss[0].Adapter != "codex-app-server-foreign" {
-		t.Fatalf("%+v", ss)
-	}
-	if ss[0].Liveness != adapter.LivenessLive || len(ss[0].Capabilities) != 0 {
-		t.Fatalf("foreign caps %+v", ss[0])
+	if len(ss) != 0 {
+		t.Fatalf("stale lock without app-server is not live, got %+v", ss)
 	}
 	_, err = a.Prompt(context.Background(), adapter.PromptRequest{SessionID: "thr_other", Prompt: []adapter.Content{{Text: "x"}}})
-	if !errors.Is(err, adapter.ErrActiveWriter) {
+	if !errors.Is(err, adapter.ErrBlockedNoLive) {
 		t.Fatalf("got %v", err)
 	}
 }

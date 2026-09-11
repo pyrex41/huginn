@@ -22,26 +22,12 @@ func (a *Adapter) listSessions(ctx context.Context) ([]sessionRow, bool, error) 
 		return nil, false, err
 	}
 	reachable := a.probe(ctx, addr)
-	locks := a.writerLocks()
-
 	if !reachable {
-		out := make([]sessionRow, 0, len(locks))
-		for id := range locks {
-			out = append(out, sessionRow{
-				sess: adapter.Session{
-					Host:         a.hostname,
-					Runtime:      adapter.RuntimeCodex,
-					ID:           id,
-					Liveness:     adapter.LivenessLive,
-					Adapter:      "codex-app-server-foreign",
-					Join:         adapter.JoinNone,
-					Capabilities: []adapter.Capability{},
-				},
-				foreign: true,
-			})
-		}
-		return out, false, nil
+		// Stale writer-lock files are not live sessions. Without a reachable
+		// app-server there is nothing to attach to.
+		return nil, false, nil
 	}
+	locks := a.writerLocks()
 
 	c, err := a.dialAndHandshake(ctx, addr)
 	if err != nil {

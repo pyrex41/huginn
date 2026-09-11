@@ -148,8 +148,8 @@ func (a *Adapter) Probe(context.Context) error {
 	return probeRuntime(a.home, a.bin)
 }
 
-func (a *Adapter) List(context.Context) ([]adapter.Session, error) {
-	listed, _, err := a.cachedList()
+func (a *Adapter) List(ctx context.Context) ([]adapter.Session, error) {
+	listed, _, err := a.cachedList(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +160,7 @@ func (a *Adapter) List(context.Context) ([]adapter.Session, error) {
 	return out, nil
 }
 
-func (a *Adapter) cachedList() ([]sessionRow, LeaderStatus, error) {
+func (a *Adapter) cachedList(ctx context.Context) ([]sessionRow, LeaderStatus, error) {
 	a.mu.Lock()
 	if a.listRows != nil && time.Since(a.listAt) < time.Second {
 		rows, lead := a.listRows, a.listLead
@@ -168,7 +168,7 @@ func (a *Adapter) cachedList() ([]sessionRow, LeaderStatus, error) {
 		return rows, lead, nil
 	}
 	a.mu.Unlock()
-	rows, lead, err := a.listSessions()
+	rows, lead, err := a.listSessions(ctx)
 	if err != nil {
 		return nil, lead, err
 	}
@@ -274,7 +274,7 @@ func (a *Adapter) LastArgv() []string {
 func (a *Adapter) ensureAttached(ctx context.Context, sessionID string, resume, relay bool) (*sessionState, error) {
 	a.attachMu.Lock()
 	defer a.attachMu.Unlock()
-	listed, leader, err := a.cachedList()
+	listed, leader, err := a.cachedList(ctx)
 	if err != nil {
 		return nil, err
 	}

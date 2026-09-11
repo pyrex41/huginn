@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,6 +54,9 @@ func TestListLiveVsResumable(t *testing.T) {
 	if disk.Liveness != adapter.LivenessResumable {
 		t.Fatalf("resumable: %+v", disk)
 	}
+	if live.Title != "Live session" {
+		t.Fatalf("live title: %+v", live)
+	}
 	if disk.Host != "testhost" || disk.Runtime != adapter.RuntimeGrok {
 		t.Fatalf("row: %+v", disk)
 	}
@@ -91,6 +95,57 @@ func TestProbeMissingRuntime(t *testing.T) {
 	ok := NewWith(Config{Home: t.TempDir(), Bin: "missing-on-purpose"})
 	if err := ok.Probe(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestProbeLeaderDialsSocketWithoutCLI(t *testing.T) {
+	home, err := os.MkdirTemp("/tmp", "hgn-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	sock := filepath.Join(home, "leader.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	marker := filepath.Join(t.TempDir(), "called")
+	bin := filepath.Join(t.TempDir(), "grok-hang")
+	script := "#!/bin/sh\necho called >" + marker + "\nexec sleep 30\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	a := NewWith(Config{Home: home, Bin: bin, Hostname: "t"})
+	start := time.Now()
+	if _, err := a.List(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatalf("leader probe too slow: %s", time.Since(start))
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("must not exec grok leader list")
+	}
+}
+
+func TestProbeLeaderNamedSocket(t *testing.T) {
+	home, err := os.MkdirTemp("/tmp", "hgn-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	sock := filepath.Join(home, "leader-dev.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	st := defaultProbeLeader(context.Background(), home, "")
+	if !st.Reachable || st.Socket != sock {
+		t.Fatalf("%+v", st)
 	}
 }
 

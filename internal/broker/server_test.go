@@ -32,7 +32,7 @@ func TestNewRefusesNonLoopback(t *testing.T) {
 }
 
 func TestRefusesMissingToken(t *testing.T) {
-	srv, err := New(Config{Bind: "127.0.0.1:0", Token: "test-token"})
+	srv, err := New(Config{Bind: "127.0.0.1:0", Token: "test-token", Host: discover.NewWith()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestRefusesMissingToken(t *testing.T) {
 }
 
 func TestRefusesWrongToken(t *testing.T) {
-	srv, err := New(Config{Bind: "127.0.0.1:0", Token: "test-token"})
+	srv, err := New(Config{Bind: "127.0.0.1:0", Token: "test-token", Host: discover.NewWith()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,11 @@ func TestRefusesWrongToken(t *testing.T) {
 }
 
 func TestListWithToken(t *testing.T) {
-	srv, err := New(Config{Bind: "127.0.0.1:0", Token: "test-token"})
+	srv, err := New(Config{
+		Bind:  "127.0.0.1:0",
+		Token: "test-token",
+		Host:  discover.NewWith(),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +98,7 @@ func TestListWithToken(t *testing.T) {
 }
 
 func TestPermissionDefaultDeny(t *testing.T) {
-	srv, err := New(Config{Bind: "127.0.0.1:0", Token: "test-token"})
+	srv, err := New(Config{Bind: "127.0.0.1:0", Token: "test-token", Host: discover.NewWith()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +116,7 @@ func TestPermissionDefaultDeny(t *testing.T) {
 }
 
 func TestClaudePluginRegisterLoopbackAndAuth(t *testing.T) {
-	srv, err := New(Config{Bind: "127.0.0.1:0", Token: "test-token"})
+	srv, err := New(Config{Bind: "127.0.0.1:0", Token: "test-token", Host: discover.NewWithToken("test-token")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +171,7 @@ func TestClaudePluginRegisterLoopbackAndAuth(t *testing.T) {
 }
 
 func TestUnknownMethod(t *testing.T) {
-	srv, err := New(Config{Bind: "127.0.0.1:0", Token: "test-token"})
+	srv, err := New(Config{Bind: "127.0.0.1:0", Token: "test-token", Host: discover.NewWith()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +310,7 @@ func TestListPagesAndFilters(t *testing.T) {
 }
 
 func TestListRejectsBadFilters(t *testing.T) {
-	srv, err := New(Config{Bind: "127.0.0.1:0", Token: "test-token"})
+	srv, err := New(Config{Bind: "127.0.0.1:0", Token: "test-token", Host: discover.NewWith()})
 	if err != nil {
 		t.Fatal(err)
 	}
