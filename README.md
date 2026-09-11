@@ -229,7 +229,8 @@ runtime, not a mock.
 4. **Sidecar contract** — one process, five verbs, auth, MCP + ACP doors.
 5. **Cross-host** — private overlay (Tailscale / WireGuard), not a bus.
    Default: `--bind $(tailscale ip -4):7419` under launchd/KeepAlive.
-   Serve is optional. See INSTALL.md §4 and [#3](https://github.com/pyrex41/huginn/issues/3).
+   Do not use Tailscale Serve unless direct bind fails. INSTALL.md §4,
+   [#3](https://github.com/pyrex41/huginn/issues/3).
 
 Finite bar for v1: from grokbot, list sessions on one enrolled machine,
 watch a live Grok turn, inject a prompt into that turn, inject into a live
@@ -242,7 +243,7 @@ into a PTY, v1 has failed.
 Done: five verbs over loopback HTTP; the three adapters; filtered/paged
 `session/list` that is fast on a real Grok home; honest `join=none` when
 nothing is attachable; MCP and ACP on the same listener; Nix sidecar module;
-cross-host **list** from grokbot over Tailscale IP bind (spike; Serve optional).
+cross-host **list** from grokbot over Tailscale IP bind under KeepAlive (spike).
 
 Not done, in the order it matters:
 

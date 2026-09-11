@@ -86,49 +86,70 @@ bug.
 ## 4. Cross-host (grokbot → laptop)
 
 Huginn does **not** ship a bus. Multi-machine is one sidecar URL per host.
-Bring your own private overlay. **Tailscale** (same account / tailnet on
-both machines) is the path that worked for grokbot ↔ macOS when both ends
-are NAT'd. Plain Tailcat was not enough as a cloud-VM *client* to a laptop
-*server*; see [#3](https://github.com/pyrex41/huginn/issues/3).
+Bring your own private overlay.
 
-### Default: bind the Tailscale IP
+**Proven path:** put both machines on the same **Tailscale** tailnet, bind
+huginn to the laptop Tailscale IP, supervise the process. No Tailscale
+Serve required. See [#3](https://github.com/pyrex41/huginn/issues/3).
 
-Keep the sidecar alive with launchd / home-manager (`KeepAlive`). Ephemeral
-shells will kill a bare `nohup` child when they exit — that looked like
-"bind does not work" until the process was supervised.
+### Default: `--bind $(tailscale ip -4):7419`
 
 ```sh
-# laptop (Tailscale up; IP from `tailscale ip -4`)
+# laptop — Tailscale logged in on both hosts first
 HUGINN_TOKEN="$(cat ~/.config/huginn/token)" \
   huginn serve --bind "$(tailscale ip -4):7419"
-# also listens on 127.0.0.1:7419
+# also listens on 127.0.0.1:7419 for local list / Claude plugin
 ```
 
 ```sh
-# grokbot / peer on the same tailnet
+# grokbot (or any peer on the tailnet)
 curl -sS -H "Authorization: Bearer $(cat mac-token)" \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"session/list","params":{"liveness":"live","limit":20}}' \
-  http://100.x.y.z:7419/
-# MagicDNS hostname works too once DNS is up
+  http://"$(tailscale ip -4 reubens-macbook-pro)":7419/
+# or MagicDNS: http://reubens-macbook-pro.tailXXXX.ts.net:7419/
 ```
 
 MCP / ACP: same host with `/mcp` or `/acp`.
 
-### Optional: Tailscale Serve
+### Supervise it (important)
 
-Only if something on the path blocks direct TCP to the sidecar. Then keep
-huginn on loopback and publish:
+A bare `nohup huginn serve … &` started from an agent/CI shell often dies
+when that shell exits. That shows up as `connection refused` on the
+Tailscale IP and looks like a TUN bug. It is not — the process is gone.
 
-```sh
-huginn serve --bind 127.0.0.1:7419
-tailscale serve --bg --http=7419 http://127.0.0.1:7419
-# prefer MagicDNS URL if the raw 100.x Serve URL 404s
+Use launchd (macOS) or the home-manager module with `KeepAlive`:
+
+```xml
+<!-- ~/Library/LaunchAgents/local.huginn.serve.plist -->
+<!-- ProgramArguments → a wrapper that cats the token and runs:
+     huginn serve --bind "$(tailscale ip -4):7419"
+     RunAtLoad + KeepAlive true -->
 ```
 
-**WireGuard** works if one side has a real public UDP endpoint (or a VPS
-relay). Two pure-NAT peers without a third host is not stock WireGuard —
-use Tailscale or Headscale instead.
+```sh
+# wrapper sketch (~/.config/huginn/run-serve.sh)
+#!/bin/bash
+IP="$(/Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4 2>/dev/null || tailscale ip -4)"
+exec env HUGINN_TOKEN="$(cat ~/.config/huginn/token)" \
+  huginn serve --bind "${IP:-127.0.0.1}:7419"
+```
+
+### What did *not* work (so we do not recommend it)
+
+| Approach | Result |
+| --- | --- |
+| Tailcat as cloud-VM **client** → laptop **server** | meow/DERP handshake timed out (laptop→VM worked) |
+| Stock WireGuard, two NAT peers, no VPS | no public UDP endpoint either side |
+| `nohup` huginn without KeepAlive | process reaped → refused on `:7419` |
+| Tailscale Serve in front of loopback | works, but unnecessary once bind is supervised; not preferred |
+
+**WireGuard** is fine if one side (or a small VPS) has a real public UDP
+port. Otherwise Tailscale / Headscale.
+
+Tailscale Serve (`tailscale serve --http=7419 …`) is a **last resort**
+only if something still blocks direct TCP after the sidecar is confirmed
+listening under KeepAlive.
 
 ## Trust
 
