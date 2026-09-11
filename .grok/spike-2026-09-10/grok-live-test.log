@@ -1,0 +1,4 @@
+# github.com/pyrex41/huginn/internal/adapter/grok
+../../go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.5.darwin-arm64/src/internal/reflectlite/value.go:11:2: package runtime is not in std (/Users/reuben/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.5.darwin-arm64/src/runtime)
+FAIL	github.com/pyrex41/huginn/internal/adapter/grok [setup failed]
+FAIL

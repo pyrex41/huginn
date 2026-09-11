@@ -1,0 +1,5 @@
+huginn: listening on 127.0.0.1:7419 token_present=true
+2026/09/11 00:42:47 INFO rpc method=session/list
+2026/09/11 00:42:49 INFO rpc method=session/list
+2026/09/11 00:42:53 INFO rpc method=session/list
+2026/09/11 00:42:55 INFO rpc method=session/list

@@ -1,0 +1,18 @@
+# github.com/pyrex41/huginn/internal/adapter/codex
+../../go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.5.darwin-arm64/src/runtime/extern.go:299:2: package internal/goos is not in std (/Users/reuben/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.5.darwin-arm64/src/internal/goos)
+# github.com/pyrex41/huginn/internal/adapter/codex
+../../go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.5.darwin-arm64/src/runtime/linkname_shim.go:9:2: package internal/runtime/maps is not in std (/Users/reuben/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.5.darwin-arm64/src/internal/runtime/maps)
+# github.com/pyrex41/huginn/internal/adapter/codex
+../../go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.5.darwin-arm64/src/crypto/internal/fips140/sha256/sha256block_arm64.go:10:2: package crypto/internal/fips140deps/cpu is not in std (/Users/reuben/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.5.darwin-arm64/src/crypto/internal/fips140deps/cpu)
+# github.com/pyrex41/huginn/internal/adapter/codex
+../../go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.5.darwin-arm64/src/crypto/internal/entropy/v1.0.0/entropy.go:9:2: package crypto/internal/fips140deps/time is not in std (/Users/reuben/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.5.darwin-arm64/src/crypto/internal/fips140deps/time)
+# github.com/pyrex41/huginn/internal/adapter/codex
+../../go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.5.darwin-arm64/src/crypto/internal/fips140/ecdsa/ecdsa.go:10:2: package crypto/internal/fips140/bigmod is not in std (/Users/reuben/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.5.darwin-arm64/src/crypto/internal/fips140/bigmod)
+# github.com/pyrex41/huginn/internal/adapter/codex
+../../go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.5.darwin-arm64/src/crypto/ecdsa/ecdsa.go:27:2: package crypto/internal/fips140cache is not in std (/Users/reuben/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.5.darwin-arm64/src/crypto/internal/fips140cache)
+# github.com/pyrex41/huginn/internal/adapter/codex
+../../go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.5.darwin-arm64/src/vendor/golang.org/x/text/secure/bidirule/bidirule.go:15:2: package vendor/golang.org/x/text/transform is not in std (/Users/reuben/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.5.darwin-arm64/src/vendor/golang.org/x/text/transform)
+# github.com/pyrex41/huginn/internal/adapter/codex
+../../go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.5.darwin-arm64/src/vendor/golang.org/x/text/secure/bidirule/bidirule.go:16:2: package vendor/golang.org/x/text/unicode/bidi is not in std (/Users/reuben/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.5.darwin-arm64/src/vendor/golang.org/x/text/unicode/bidi)
+FAIL	github.com/pyrex41/huginn/internal/adapter/codex [setup failed]
+FAIL

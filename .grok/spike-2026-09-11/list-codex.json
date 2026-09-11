@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":1,"result":{"sessions":[],"adapters":[{"runtime":"grok","adapter":"grok-acp","status":"ok"},{"runtime":"codex","adapter":"codex-app-server","status":"ok"},{"runtime":"claude","adapter":"claude-channel","status":"ok"}],"total":0}}

@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"claude: channel plugin not registered; launch with --dangerously-load-development-channels server:huginn"}}
