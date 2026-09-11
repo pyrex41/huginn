@@ -227,7 +227,9 @@ runtime, not a mock.
 2. **Codex app-server** — unix socket, TUI via `--remote`, huginn as second client.
 3. **Claude channel** — huginn MCP channel plugin, loopback inject, allowlist.
 4. **Sidecar contract** — one process, five verbs, auth, MCP + ACP doors.
-5. **Cross-host** — bind a private overlay address. Not a bus.
+5. **Cross-host** — private overlay (Tailscale / WireGuard), not a bus.
+   On macOS prefer loopback + `tailscale serve --http=7419` and MagicDNS;
+   see INSTALL.md §4 and [#3](https://github.com/pyrex41/huginn/issues/3).
 
 Finite bar for v1: from grokbot, list sessions on one enrolled machine,
 watch a live Grok turn, inject a prompt into that turn, inject into a live
@@ -239,7 +241,8 @@ into a PTY, v1 has failed.
 
 Done: five verbs over loopback HTTP; the three adapters; filtered/paged
 `session/list` that is fast on a real Grok home; honest `join=none` when
-nothing is attachable; MCP and ACP on the same listener; Nix sidecar module.
+nothing is attachable; MCP and ACP on the same listener; Nix sidecar module;
+cross-host **list** from grokbot over Tailscale Serve → MagicDNS (spike).
 
 Not done, in the order it matters:
 
